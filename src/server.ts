@@ -27,8 +27,21 @@ export function createApp(client: Client) {
     }
     if (event === "ping") return c.json({ ok: true, pong: true });
 
+    // Webhooks can be configured as JSON or as a form with the JSON in a `payload` field.
+    const isForm = c.req.header("content-type")?.startsWith("application/x-www-form-urlencoded");
+    const json = isForm ? new URLSearchParams(rawBody).get("payload") : rawBody;
+    let payload;
+    try {
+      payload = JSON.parse(json ?? "");
+    } catch {
+      return c.json({ error: "invalid payload" }, 400);
+    }
+
+    const { action, issue } = payload as { action?: string; issue?: { number?: number } };
+    console.log(`GitHub webhook: ${event}${action ? `.${action}` : ""}${issue?.number ? ` #${issue.number}` : ""}`);
+
     // Acknowledge immediately; GitHub times out deliveries after 10 seconds.
-    handleGithubEvent(client, event, JSON.parse(rawBody)).catch((error) =>
+    handleGithubEvent(client, event, payload).catch((error) =>
       console.error(`Failed to handle GitHub ${event} event:`, error),
     );
     return c.json({ ok: true }, 202);

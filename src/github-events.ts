@@ -31,7 +31,10 @@ export async function handleGithubEvent(client: Client, event: string, payload: 
   if (!payload.issue || payload.issue.pull_request) return;
 
   const link = links.byIssue(repoSlug, payload.issue.number);
-  if (!link) return;
+  if (!link) {
+    console.log(`No Discord post is linked to ${repoSlug}#${payload.issue.number}; ignoring`);
+    return;
+  }
 
   if (event === "issues" && payload.action === "deleted") {
     links.removeByIssue(repoSlug, payload.issue.number);
