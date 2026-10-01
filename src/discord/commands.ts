@@ -46,11 +46,12 @@ export const commands = [
     .setContexts(InteractionContextType.Guild)
     .addStringOption((opt) =>
       opt
-        .setName("outcome")
-        .setDescription("How the linked GitHub issue is closed (staff only, default: added)")
+        .setName("reason")
+        .setDescription("Why the post is being closed (default: Resolved; Added/Rejected are staff only)")
         .addChoices(
-          { name: "Added / fixed", value: "completed" },
-          { name: "Rejected / won't do", value: "not_planned" },
+          { name: "Resolved: answered or solved", value: "resolved" },
+          { name: "Added: fixed or implemented", value: "added" },
+          { name: "Rejected: won't be done", value: "rejected" },
         ),
     )
     .addBooleanOption((opt) =>

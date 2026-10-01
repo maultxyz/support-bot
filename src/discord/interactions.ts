@@ -2,21 +2,16 @@ import {
   EmbedBuilder,
   MessageFlags,
   type ButtonInteraction,
+  type AnyThreadChannel,
   type ChatInputCommandInteraction,
   type Interaction,
   type StringSelectMenuInteraction,
+  type User,
 } from "discord.js";
 import { config, type IssueKind } from "../config.js";
 import { links } from "../db.js";
 import { getIssue } from "../github.js";
-import {
-  createIssueForThread,
-  linkExistingIssue,
-  resolveThread,
-  SyncError,
-  unlinkThread,
-  type CloseReason,
-} from "../sync.js";
+import { createIssueForThread, linkExistingIssue, resolveThread, SyncError, unlinkThread } from "../sync.js";
 import { handleSetupCommand } from "./setup.js";
 import {
   asForumThread,
@@ -25,9 +20,12 @@ import {
   isStaff,
   KIND_LABEL,
   linkEmbed,
+  RESOLVE_REASONS,
+  resolveReasonPicker,
   setTopicTags,
   updateThread,
   withoutComponent,
+  type ResolveReason,
 } from "./util.js";
 
 type ThreadInteraction = ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
@@ -46,6 +44,8 @@ export async function handleInteraction(interaction: Interaction) {
       await handleCreateButton(interaction);
     } else if (interaction.customId === ComponentIds.resolve) {
       await handleResolve(interaction);
+    } else if (interaction.customId.startsWith(ComponentIds.resolveAs)) {
+      await handleResolveAs(interaction);
     }
   } catch (error) {
     const content =
@@ -177,38 +177,83 @@ async function handleTopicSelect(interaction: StringSelectMenuInteraction) {
   });
 }
 
-async function handleResolve(interaction: ThreadInteraction) {
+/** `/resolve` and the "Mark resolved" button. */
+async function handleResolve(interaction: ChatInputCommandInteraction | ButtonInteraction) {
   const { thread } = requireForumThread(interaction);
   const staff = isStaff(interaction);
   if (!staff && interaction.user.id !== thread.ownerId) {
     throw new SyncError("Only the person who opened this post or staff can resolve it.");
   }
 
+  // Staff pressing the button pick a reason first; the author can only mark their post Resolved.
+  if (interaction.isButton() && staff) {
+    await interaction.reply({
+      content: "Why is this post being closed?",
+      components: [resolveReasonPicker()],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
   const options = interaction.isChatInputCommand() ? interaction.options : null;
+  const reason = (options?.getString("reason") as ResolveReason | null) ?? "resolved";
+  if (reason !== "resolved" && !staff) throw new SyncError("Only staff can close a post as Added or Rejected.");
   const closeIssue = staff && (options?.getBoolean("close_issue") ?? true);
-  const reason: CloseReason = (staff && (options?.getString("outcome") as CloseReason | null)) || "completed";
 
   await interaction.deferReply();
-  const { link, closedIssue, status } = await resolveThread(thread, interaction.user, { closeIssue, reason });
-  const rejected = status === "REJECTED";
+  await resolvePost(thread, interaction.user, reason, closeIssue, (embed) =>
+    interaction.editReply({ embeds: [embed] }),
+  );
+}
 
-  const lines = [`${rejected ? "Rejected" : "Marked as resolved"} by ${interaction.user}. This post is now closed.`];
+/** A reason button from the staff picker. */
+async function handleResolveAs(interaction: ButtonInteraction) {
+  const { thread } = requireForumThread(interaction);
+  requireStaff(interaction);
+  const reason = interaction.customId.slice(ComponentIds.resolveAs.length);
+  if (!(reason in RESOLVE_REASONS)) return;
+
+  await interaction.deferUpdate();
+  await resolvePost(thread, interaction.user, reason as ResolveReason, true, (embed) =>
+    thread.send({ embeds: [embed] }),
+  );
+  await interaction.editReply({
+    content: `Closed as **${RESOLVE_REASONS[reason as ResolveReason].label}**.`,
+    components: [],
+  });
+}
+
+/** Closes the linked issue if asked, announces the outcome, then tags and closes the post. */
+async function resolvePost(
+  thread: AnyThreadChannel,
+  actor: User,
+  reason: ResolveReason,
+  closeIssue: boolean,
+  announce: (embed: EmbedBuilder) => Promise<unknown>,
+) {
+  const info = RESOLVE_REASONS[reason];
+  const { link, closedIssue, status } = await resolveThread(thread, actor, {
+    closeIssue,
+    reason: info.closeAs,
+    label: info.label,
+  });
+
+  const lines = [`Closed as **${info.label}** by ${actor}.`];
   if (closedIssue && link) lines.push(`Closed [${link.repo}#${link.issueNumber}](${link.issueUrl}).`);
   lines.push("Send a message here if you need to reopen it.");
+  await announce(
+    new EmbedBuilder()
+      .setColor(info.color)
+      .setTitle(`${info.emoji} ${info.label}`)
+      .setDescription(lines.join("\n")),
+  );
 
-  await interaction.editReply({
-    embeds: [
-      new EmbedBuilder()
-        .setColor(rejected ? Colors.muted : Colors.merged)
-        .setTitle(rejected ? "Rejected" : "Resolved")
-        .setDescription(lines.join("\n")),
-    ],
-  });
   await updateThread(thread, {
-    status,
-    // Linked posts show their issue status instead of the generic Resolved tag.
-    addTags: status ? [] : [config.RESOLVED_TAG_NAME],
+    // Added/Rejected replace the status tag. Resolved keeps a still-open issue's Pending tag.
+    status: info.status ?? (link && !closedIssue ? status : null),
+    addTags: info.status ? [] : [config.RESOLVED_TAG_NAME],
+    removeTags: info.status ? [config.RESOLVED_TAG_NAME] : [],
     archived: true,
-    reason: `Resolved by ${interaction.user.username}`,
+    reason: `Closed as ${info.label} by ${actor.username}`,
   });
 }

@@ -5,7 +5,8 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 ## Features
 
 - **Configured from Discord.** Use `/setup forum add` to register any number of support or feature-request forums, and `/setup staff add` to choose which roles count as staff. Neither needs env vars.
-- **Status tags.** Posts linked to an issue are tagged `Pending` while the issue is open, `Added` when it's closed as completed, and `Rejected` when it's closed as not planned or a duplicate. The bot never changes post titles. Posts resolved without a linked issue get the `Resolved` tag.
+- **Status tags.** Posts linked to an issue are tagged `Pending` while the issue is open, `Added` when it's closed as completed, and `Rejected` when it's closed as not planned or a duplicate. The bot never changes post titles.
+- **Closing reasons.** Every closed post is tagged with why it was closed: `Resolved` (answered or solved), `Added` (fixed or implemented), or `Rejected` (won't be done). When staff press **Mark resolved**, they pick the reason from a private menu. A post's author can close it themselves, but only as `Resolved`.
 - **Forum-based support.** Every new post in a registered forum gets a welcome message with **Track on GitHub** and **Mark resolved** buttons.
 - **Topic tagging prompt.** If a new post has no topic tag yet, the welcome message includes a menu of the forum's tags (e.g. `3D Model`, `Web`, `Server`, `Discord`). The author or staff pick up to 4, and the bot applies them. Topic tags are simply the forum's own tags, managed in the forum's Discord settings. The bot's status tags and any moderated tags are left out.
 - **Discord → GitHub**
@@ -13,7 +14,7 @@ A Discord support bot for **forum channels** that syncs support and feature requ
   - `/issue link <number>` attaches a post to an issue that already exists.
   - Topic tags added to a linked post later become labels on its issue. Removing a tag in Discord doesn't remove the label, so triage done on GitHub isn't undone. GitHub creates any label that doesn't exist yet.
   - Replies in a linked post are mirrored as issue comments.
-  - `/resolve` (by staff) closes the linked issue as added or rejected.
+  - Closing a linked post as staff also closes its issue. `Rejected` closes it as *not planned*, and the other reasons close it as *completed*.
 - **GitHub → Discord** (via webhook)
   - New issue comments are posted into the thread.
   - When the issue is closed, the bot posts a notice, swaps the tag to `Added` or `Rejected`, and closes the post.
@@ -33,7 +34,7 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 | `/issue link <number>` | Staff | Link this post to an existing issue |
 | `/issue unlink` | Staff | Remove the link (the issue is left untouched) |
 | `/issue status` | Staff | Show the linked issue's state, labels, and assignees |
-| `/resolve [outcome] [close_issue]` | Post author or staff | Close the post. Staff also close the linked issue (default `true`), as **Added** (default) or **Rejected**. The status tag updates to match |
+| `/resolve [reason] [close_issue]` | Post author or staff | Close the post and tag it with the reason: **Resolved** (default), **Added**, or **Rejected**. Only staff can choose Added or Rejected. Staff also close the linked issue (default `true`) |
 
 **Staff** means members with a role added through `/setup staff add`, plus anyone with **Manage Threads** (so moderators work before any roles are set up). Staff can use `/issue` and resolve any post. Everyone can see `/issue`, but the bot rejects non-staff when they run it. `/setup` is hidden from members without Manage Server. To change that, go to *Server Settings → Integrations*.
 

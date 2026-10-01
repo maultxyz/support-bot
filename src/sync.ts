@@ -160,7 +160,7 @@ export type CloseReason = "completed" | "not_planned";
 export async function resolveThread(
   thread: AnyThreadChannel,
   actor: User,
-  options: { closeIssue: boolean; reason: CloseReason },
+  options: { closeIssue: boolean; reason: CloseReason; label: string },
 ) {
   const link = links.byThread(thread.id);
   let closedIssue = false;
@@ -172,9 +172,7 @@ export async function resolveThread(
       const rejected = options.reason === "not_planned";
       await github.commentOnIssue(
         link.issueNumber,
-        rejected
-          ? `🚫 Rejected on Discord by **${actor.username}**.`
-          : `✅ Marked as resolved on Discord by **${actor.username}**.`,
+        `${rejected ? "🚫" : "✅"} Closed as **${options.label}** on Discord by **${actor.username}**.`,
       );
       expectGithubEvent(`closed:${link.issueNumber}`);
       await github.closeIssue(link.issueNumber, options.reason);

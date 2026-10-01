@@ -27,6 +27,8 @@ export const ComponentIds = {
   createIssue: "support:create-issue",
   resolve: "support:resolve",
   topics: "support:topics",
+  /** Prefix; followed by a ResolveReason. */
+  resolveAs: "support:resolve-as:",
 } as const;
 
 export const KIND_LABEL: Record<IssueKind, string> = {
@@ -59,6 +61,52 @@ export const STATUS_TAGS: Record<PostStatus, string> = {
   ADDED: config.ADDED_TAG_NAME,
   REJECTED: config.REJECTED_TAG_NAME,
 };
+
+export type ResolveReason = "resolved" | "added" | "rejected";
+
+/** Why a post was closed. Each reason is shown as a tag and decides how a linked issue is closed. */
+export const RESOLVE_REASONS: Record<
+  ResolveReason,
+  { label: string; description: string; emoji: string; color: number; status: PostStatus | null; closeAs: "completed" | "not_planned" }
+> = {
+  resolved: {
+    label: "Resolved",
+    description: "Question answered or problem solved",
+    emoji: "✅",
+    color: Colors.success,
+    status: null, // uses the Resolved tag
+    closeAs: "completed",
+  },
+  added: {
+    label: "Added",
+    description: "Fixed or implemented",
+    emoji: "🚀",
+    color: Colors.merged,
+    status: "ADDED",
+    closeAs: "completed",
+  },
+  rejected: {
+    label: "Rejected",
+    description: "Won't be done",
+    emoji: "🚫",
+    color: Colors.muted,
+    status: "REJECTED",
+    closeAs: "not_planned",
+  },
+};
+
+/** Staff-only picker shown when staff press "Mark resolved". */
+export function resolveReasonPicker() {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    Object.entries(RESOLVE_REASONS).map(([reason, info]) =>
+      new ButtonBuilder()
+        .setCustomId(`${ComponentIds.resolveAs}${reason}`)
+        .setLabel(`${info.label}: ${info.description}`)
+        .setEmoji(info.emoji)
+        .setStyle(reason === "rejected" ? ButtonStyle.Danger : reason === "added" ? ButtonStyle.Primary : ButtonStyle.Success),
+    ),
+  );
+}
 
 /** Maps a GitHub issue's state to the post status. */
 export function issueStatus(issue: { state: string; state_reason?: string | null }): PostStatus {
