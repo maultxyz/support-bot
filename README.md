@@ -1,0 +1,112 @@
+# support-bot
+
+A Discord support bot for **forum channels** that syncs support and feature requests to **GitHub issues** in both directions. It's built with [discord.js](https://discord.js.org) and [Hono](https://hono.dev) and runs in Docker, for example on [Coolify](https://coolify.io).
+
+## Features
+
+- **Configured from Discord.** Use `/setup forum add` to register any number of support or feature-request forums, and `/setup staff add` to choose which roles count as staff. Neither needs env vars.
+- **Forum-based support.** Every new post in a registered forum gets a welcome message with **Track on GitHub** and **Mark resolved** buttons.
+- **Discord → GitHub**
+  - Staff turn a post into a GitHub issue. The post's title becomes the issue title, its first message and attachments become the issue body, and the issue is labelled by request type.
+  - `/issue link <number>` attaches a post to an issue that already exists.
+  - Replies in a linked post are mirrored as issue comments.
+  - `/resolve` (by staff) closes the linked issue.
+- **GitHub → Discord** (via webhook)
+  - New issue comments are posted into the thread.
+  - When the issue is closed, the bot posts a notice, tags the post `Resolved`, and archives it.
+  - When the issue is reopened, the bot unarchives the post and removes the `Resolved` tag.
+- **No echo loops.** Comments the bot writes on GitHub carry a hidden marker, and issue closes the bot triggers itself are skipped, so nothing gets mirrored twice.
+
+## Commands
+
+| Command | Who | What it does |
+| --- | --- | --- |
+| `/setup forum add <channel> <type> [create_tags]` | Manage Server | Register a forum as support or feature requests (run it again to change the type). Checks the bot's permissions and creates missing tags |
+| `/setup forum remove <channel>` | Manage Server | Stop managing a forum |
+| `/setup staff add <role>` | Manage Server | Make a role support staff |
+| `/setup staff remove <role>` | Manage Server | Remove a role from support staff |
+| `/setup show` | Manage Server | Show the registered forums, staff roles, and GitHub repo |
+| `/issue create [type] [title]` | Staff | Create a GitHub issue from this post |
+| `/issue link <number>` | Staff | Link this post to an existing issue |
+| `/issue unlink` | Staff | Remove the link (the issue is left untouched) |
+| `/issue status` | Staff | Show the linked issue's state, labels, and assignees |
+| `/resolve [close_issue]` | Post author or staff | Tag the post Resolved and archive it. Staff also close the linked issue (default `true`) |
+
+**Staff** means members with a role added through `/setup staff add`, plus anyone with **Manage Threads** (so moderators work before any roles are set up). Staff can use `/issue` and resolve any post. Everyone can see `/issue`, but the bot rejects non-staff when they run it. `/setup` is hidden from members without Manage Server. To change that, go to *Server Settings → Integrations*.
+
+## Setup
+
+### 1. Discord application
+
+1. Create an application at <https://discord.com/developers/applications> and add a **Bot**.
+2. Under **Bot → Privileged Gateway Intents**, enable **Message Content Intent**.
+3. Invite the bot with the `bot` and `applications.commands` scopes and these permissions: View Channels, Send Messages, Send Messages in Threads, Embed Links, Read Message History, **Manage Threads** (needed to archive posts and edit their tags). **Manage Channels** is optional: it lets `/setup forum` create the `Resolved` and `Tracked` tags for you.
+4. Turn on Developer Mode, then copy the server ID for `DISCORD_GUILD_ID`.
+5. Once the bot is running, run `/setup forum add` for each forum. The reply tells you if the bot lacks permissions in that forum. Then run `/setup staff add` for each support role.
+
+### 2. GitHub
+
+1. Create a **fine-grained personal access token** limited to the target repo, with **Issues: Read and write**. Issues and comments will appear under that account, so a dedicated bot account looks cleanest.
+2. In the repo, go to *Settings → Webhooks → Add webhook*:
+   - **Payload URL:** `https://<your-domain>/webhooks/github`
+   - **Content type:** `application/json`
+   - **Secret:** the same value as `GITHUB_WEBHOOK_SECRET`
+   - **Events:** *Let me select individual events* → **Issues** and **Issue comments**
+
+### 3. Configure
+
+Copy `.env.example` to `.env` and fill it in. See that file for what each variable does.
+
+### 4. Run locally
+
+```sh
+npm install
+npm run dev
+```
+
+Requires Node.js 22.13 or newer (it uses the built-in `node:sqlite`). To receive GitHub webhooks locally, expose port 3000 with a tunnel such as `cloudflared` or `ngrok`.
+
+## Deploying on Coolify
+
+**Option A: Dockerfile (simplest)**
+
+1. *New Resource → Public/Private Repository*, then pick this repo and choose the **Dockerfile** build pack.
+2. Set **Ports Exposes** to `3000` and assign a domain. The domain is what GitHub's webhook calls.
+3. Under *Persistent Storage*, add a volume mounted at **`/app/data`**. This holds the SQLite database of forums, staff roles, and thread ↔ issue links. Without it, all of these are lost on every redeploy.
+4. Add the variables from `.env.example` under *Environment Variables*.
+5. Deploy. Coolify uses the image's `HEALTHCHECK`, which calls `/health` and returns 200 once the bot is connected to Discord.
+
+**Option B: Docker Compose.** Choose the **Docker Compose** build pack instead. `docker-compose.yml` already declares the volume, and Coolify will list every variable for you to fill in.
+
+> Run only **one** instance. Running two means two gateway connections, and every event gets handled twice.
+
+## HTTP endpoints
+
+| Route | Purpose |
+| --- | --- |
+| `GET /health` | `200` when connected to Discord, `503` otherwise |
+| `POST /webhooks/github` | GitHub webhook receiver (HMAC-SHA256 verified) |
+
+## Project layout
+
+```
+src/
+  index.ts           boot: Hono server + Discord login + graceful shutdown
+  config.ts          env validation (zod)
+  db.ts              SQLite store: thread ↔ issue links, forums, staff roles
+  github.ts          Octokit helpers
+  sync.ts            Discord → GitHub logic (create/link/resolve/mirror)
+  github-events.ts   GitHub → Discord webhook handling
+  server.ts          Hono routes
+  discord/
+    client.ts        gateway client + event wiring
+    commands.ts      slash command definitions/registration
+    interactions.ts  slash command + button handlers
+    setup.ts         /setup: forums and staff roles
+    util.ts          tags, permissions, embeds
+```
+
+## Notes
+
+- Attachments are linked from the issue as Discord CDN URLs. These links can expire, so for long-lived issues, re-upload important screenshots to GitHub.
+- Slash commands are registered to `DISCORD_GUILD_ID` on startup, so changes show up immediately.

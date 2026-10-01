@@ -1,0 +1,184 @@
+import type { AnyThreadChannel, Message, User } from "discord.js";
+import { config, type IssueKind } from "./config.js";
+import { links, type IssueLink } from "./db.js";
+import { KIND_LABEL, setTag, truncate } from "./discord/util.js";
+import * as github from "./github.js";
+
+/** An expected failure whose message is safe to show to the Discord user. */
+export class SyncError extends Error {}
+
+// GitHub sends webhooks for changes the bot makes itself. Remember those briefly
+// so the webhook handler doesn't announce them in Discord a second time.
+const expectedEvents = new Set<string>();
+
+export function expectGithubEvent(key: string) {
+  expectedEvents.add(key);
+  setTimeout(() => expectedEvents.delete(key), 60_000).unref();
+}
+
+export function consumeExpectedEvent(key: string) {
+  return expectedEvents.delete(key);
+}
+
+// Guards against two staff members creating an issue for the same thread at once.
+const inFlight = new Set<string>();
+
+async function withThreadLock<T>(threadId: string, fn: () => Promise<T>): Promise<T> {
+  if (inFlight.has(threadId)) throw new SyncError("This thread is already being synced, try again in a moment.");
+  inFlight.add(threadId);
+  try {
+    return await fn();
+  } finally {
+    inFlight.delete(threadId);
+  }
+}
+
+function assertUnlinked(threadId: string) {
+  const existing = links.byThread(threadId);
+  if (existing) {
+    throw new SyncError(
+      `This thread is already linked to [${existing.repo}#${existing.issueNumber}](${existing.issueUrl}).`,
+    );
+  }
+}
+
+function attachmentLines(message: Message) {
+  return message.attachments.map((a) => `- [${a.name}](${a.url})`);
+}
+
+export async function createIssueForThread(
+  thread: AnyThreadChannel,
+  kind: IssueKind,
+  actor: User,
+  title?: string,
+): Promise<IssueLink> {
+  return withThreadLock(thread.id, async () => {
+    assertUnlinked(thread.id);
+
+    const starter = await thread.fetchStarterMessage().catch(() => null);
+    const body = [starter?.cleanContent.trim() || "_No description provided._"];
+
+    if (starter?.attachments.size) {
+      body.push("", "**Attachments**", ...attachmentLines(starter));
+    }
+    body.push(
+      "",
+      "---",
+      `<sub>${KIND_LABEL[kind]} from Discord: [${thread.name}](${thread.url}) · ` +
+        `opened by **${starter?.author.username ?? "unknown"}** · synced by **${actor.username}**</sub>`,
+    );
+
+    const issue = await github.createIssue({
+      title: title ?? thread.name,
+      body: truncate(body.join("\n"), 60_000),
+      labels: kind === "feature" ? config.FEATURE_LABELS : config.SUPPORT_LABELS,
+    });
+
+    const link = links.create({
+      threadId: thread.id,
+      guildId: thread.guildId,
+      repo: github.repoSlug,
+      issueNumber: issue.number,
+      issueUrl: issue.html_url,
+      kind,
+      createdBy: actor.id,
+    });
+
+    await setTag(thread, config.TRACKED_TAG_NAME, true).catch(logWarning("apply tracked tag"));
+    return link;
+  });
+}
+
+export async function linkExistingIssue(
+  thread: AnyThreadChannel,
+  kind: IssueKind,
+  issueNumber: number,
+  actor: User,
+): Promise<IssueLink> {
+  return withThreadLock(thread.id, async () => {
+    assertUnlinked(thread.id);
+
+    const other = links.byIssue(github.repoSlug, issueNumber);
+    if (other) throw new SyncError(`Issue #${issueNumber} is already linked to <#${other.threadId}>.`);
+
+    const issue = await github.getIssue(issueNumber);
+    if (!issue) throw new SyncError(`Issue #${issueNumber} was not found in ${github.repoSlug}.`);
+    if (issue.pull_request) throw new SyncError(`#${issueNumber} is a pull request, not an issue.`);
+
+    const link = links.create({
+      threadId: thread.id,
+      guildId: thread.guildId,
+      repo: github.repoSlug,
+      issueNumber,
+      issueUrl: issue.html_url,
+      kind,
+      createdBy: actor.id,
+    });
+
+    await github.commentOnIssue(
+      issueNumber,
+      `🔗 Linked to Discord ${KIND_LABEL[kind]} [${thread.name}](${thread.url}) by **${actor.username}**.`,
+    );
+    await setTag(thread, config.TRACKED_TAG_NAME, true).catch(logWarning("apply tracked tag"));
+    return link;
+  });
+}
+
+export async function unlinkThread(thread: AnyThreadChannel): Promise<IssueLink> {
+  const link = links.byThread(thread.id);
+  if (!link) throw new SyncError("This thread isn't linked to a GitHub issue.");
+  links.removeByThread(thread.id);
+  await setTag(thread, config.TRACKED_TAG_NAME, false).catch(logWarning("remove tracked tag"));
+  return link;
+}
+
+/**
+ * Tags the thread as resolved and optionally closes the linked issue.
+ * Archiving is left to the caller so it can reply to the interaction first.
+ */
+export async function resolveThread(thread: AnyThreadChannel, actor: User, closeLinkedIssue: boolean) {
+  const link = links.byThread(thread.id);
+  let closedIssue = false;
+
+  if (link && closeLinkedIssue) {
+    const issue = await github.getIssue(link.issueNumber);
+    if (issue?.state === "open") {
+      await github.commentOnIssue(
+        link.issueNumber,
+        `✅ Marked as resolved on Discord by **${actor.username}**.`,
+      );
+      expectGithubEvent(`closed:${link.issueNumber}`);
+      await github.closeIssue(link.issueNumber);
+      closedIssue = true;
+    }
+  }
+
+  await setTag(thread, config.RESOLVED_TAG_NAME, true).catch(logWarning("apply resolved tag"));
+  return { link, closedIssue };
+}
+
+/** Mirrors a Discord reply in a linked thread as a GitHub issue comment. */
+export async function mirrorMessageToIssue(message: Message) {
+  if (!config.MIRROR_DISCORD_MESSAGES) return;
+  if (message.author.bot || message.system || !message.channel.isThread()) return;
+  // In forum posts the starter message shares the thread's ID; it's already the issue body.
+  if (message.id === message.channelId) return;
+
+  const link = links.byThread(message.channelId);
+  if (!link) return;
+
+  const content = message.cleanContent.trim();
+  const attachments = attachmentLines(message);
+  if (!content && attachments.length === 0) return;
+
+  const author = message.member?.displayName ?? message.author.username;
+  const body = [`**${author}** [replied on Discord](${message.url}):`, ""];
+  if (content) body.push(content.split("\n").map((line) => `> ${line}`).join("\n"));
+  if (attachments.length) body.push("", ...attachments);
+
+  await github.commentOnIssue(link.issueNumber, truncate(body.join("\n"), 60_000));
+}
+
+export function logWarning(action: string) {
+  return (error: unknown) => console.warn(`Failed to ${action}:`, error);
+}

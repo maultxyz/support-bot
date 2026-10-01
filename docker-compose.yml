@@ -1,0 +1,27 @@
+# Works locally (`docker compose up`) and with Coolify's "Docker Compose" build pack.
+# Coolify surfaces every ${VARIABLE} below in its Environment Variables tab.
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID}
+      RESOLVED_TAG_NAME: ${RESOLVED_TAG_NAME:-Resolved}
+      TRACKED_TAG_NAME: ${TRACKED_TAG_NAME:-Tracked}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_OWNER: ${GITHUB_OWNER}
+      GITHUB_REPO: ${GITHUB_REPO}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
+      SUPPORT_LABELS: ${SUPPORT_LABELS:-support}
+      FEATURE_LABELS: ${FEATURE_LABELS:-enhancement}
+      MIRROR_DISCORD_MESSAGES: ${MIRROR_DISCORD_MESSAGES:-true}
+      MIRROR_GITHUB_COMMENTS: ${MIRROR_GITHUB_COMMENTS:-true}
+      ARCHIVE_ON_CLOSE: ${ARCHIVE_ON_CLOSE:-true}
+    volumes:
+      - bot-data:/app/data
+
+volumes:
+  bot-data:
