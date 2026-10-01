@@ -17,6 +17,7 @@ A Discord support bot for **forum channels** that syncs support and feature requ
   - Closing a linked post as staff also closes its issue. `Rejected` closes it as *not planned*, and the other reasons close it as *completed*.
 - **GitHub → Discord** (via webhook)
   - New issue comments are posted into the thread.
+  - When someone is assigned to the issue, the bot posts that they're working on it.
   - When the issue is closed, the bot posts a notice, swaps the tag to `Added` or `Rejected`, and closes the post.
   - When the issue is reopened, the bot reopens the post and sets the tag back to `Pending`.
 - **No echo loops.** Comments the bot writes on GitHub carry a hidden marker, and issue closes the bot triggers itself are skipped, so nothing gets mirrored twice.

@@ -22,6 +22,7 @@ interface IssuesPayload {
     pull_request?: unknown;
   };
   comment?: { body: string; html_url: string; user: GithubUser };
+  assignee?: GithubUser | null;
   repository: { full_name: string };
   sender: GithubUser;
 }
@@ -44,6 +45,7 @@ export async function handleGithubEvent(client: Client, event: string, payload: 
   const handler =
     event === "issues" && payload.action === "closed" ? onIssueClosed
     : event === "issues" && payload.action === "reopened" ? onIssueReopened
+    : event === "issues" && payload.action === "assigned" ? onIssueAssigned
     : event === "issue_comment" && payload.action === "created" ? onIssueComment
     : null;
   if (!handler) return;
@@ -104,6 +106,27 @@ const onIssueReopened: Handler = async (thread, _link, { issue, sender }) => {
         .setTitle(`Issue #${issue.number} reopened`)
         .setURL(issue.html_url)
         .setDescription(truncate(issue.title, 4096)),
+    ],
+  });
+};
+
+const onIssueAssigned: Handler = async (thread, _link, { issue, assignee, sender }) => {
+  if (!assignee) return;
+
+  const selfAssigned = assignee.login === sender.login;
+  await ensureOpen(thread);
+  await thread.send({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(Colors.brand)
+        .setAuthor({ name: assignee.login, iconURL: assignee.avatar_url, url: assignee.html_url })
+        .setTitle(`${assignee.login} is working on this`)
+        .setURL(issue.html_url)
+        .setDescription(
+          selfAssigned
+            ? `Assigned to issue #${issue.number}.`
+            : `Assigned to issue #${issue.number} by ${sender.login}.`,
+        ),
     ],
   });
 };
