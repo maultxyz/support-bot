@@ -5,7 +5,6 @@ import {
   SlashCommandBuilder,
   type Client,
 } from "discord.js";
-import { config } from "../config.js";
 
 export const commands = [
   new SlashCommandBuilder()
@@ -120,8 +119,8 @@ export const commands = [
     .addSubcommand((sub) => sub.setName("show").setDescription("Show the current bot configuration")),
 ].map((command) => command.toJSON());
 
-/** Registers commands on the configured guild so changes show up instantly. */
+/** Registers commands globally so they work in every server the bot is invited to. */
 export async function registerCommands(client: Client<true>) {
-  await client.application.commands.set(commands, config.DISCORD_GUILD_ID);
-  console.log(`Registered ${commands.length} slash commands in guild ${config.DISCORD_GUILD_ID}`);
+  await client.application.commands.set(commands);
+  console.log(`Registered ${commands.length} global slash commands`);
 }

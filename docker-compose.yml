@@ -8,7 +8,6 @@ services:
       - "3000:3000"
     environment:
       DISCORD_TOKEN: ${DISCORD_TOKEN}
-      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID}
       RESOLVED_TAG_NAME: ${RESOLVED_TAG_NAME:-Resolved}
       TRACKED_TAG_NAME: ${TRACKED_TAG_NAME:-Tracked}
       GITHUB_TOKEN: ${GITHUB_TOKEN}

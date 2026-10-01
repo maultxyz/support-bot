@@ -87,6 +87,15 @@ export const links = {
   },
 };
 
+const removeGuildStatements = ["issue_links", "forums", "staff_roles"].map((table) =>
+  db.prepare(`DELETE FROM ${table} WHERE guild_id = ?`),
+);
+
+/** Forgets everything stored for a server, e.g. when the bot is removed from it. */
+export function removeGuildData(guildId: string) {
+  for (const statement of removeGuildStatements) statement.run(guildId);
+}
+
 export interface ForumConfig {
   channelId: string;
   guildId: string;

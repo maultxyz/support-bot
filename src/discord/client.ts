@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { Client, Events, GatewayIntentBits, type AnyThreadChannel } from "discord.js";
-import { forums, links, staffRoles } from "../db.js";
+import { Client, Events, GatewayIntentBits, OAuth2Scopes, PermissionFlagsBits, type AnyThreadChannel } from "discord.js";
+import { forums, links, removeGuildData, staffRoles } from "../db.js";
 import { logWarning, mirrorMessageToIssue } from "../sync.js";
 import { registerCommands } from "./commands.js";
 import { handleInteraction } from "./interactions.js";
@@ -17,8 +17,17 @@ export function createDiscordClient() {
   });
 
   client.once(Events.ClientReady, async (ready) => {
-    console.log(`Logged in to Discord as ${ready.user.tag}`);
+    console.log(`Logged in to Discord as ${ready.user.tag} (in ${ready.guilds.cache.size} servers)`);
+    console.log(`Invite link: ${inviteUrl(ready)}`);
     await registerCommands(ready).catch(logWarning("register slash commands"));
+  });
+
+  client.on(Events.GuildCreate, (guild) => console.log(`Joined server ${guild.name} (${guild.id})`));
+  client.on(Events.GuildDelete, (guild) => {
+    // Also fires during Discord outages; only forget a server the bot was actually removed from.
+    if (!guild.available) return;
+    removeGuildData(guild.id);
+    console.log(`Removed from server ${guild.name} (${guild.id}); deleted its configuration`);
   });
 
   client.on(Events.ThreadCreate, (thread, newlyCreated) => {
@@ -38,6 +47,21 @@ export function createDiscordClient() {
   client.on(Events.Error, (error) => console.error("Discord client error:", error));
 
   return client;
+}
+
+function inviteUrl(client: Client<true>) {
+  return client.generateInvite({
+    scopes: [OAuth2Scopes.Bot, OAuth2Scopes.ApplicationsCommands],
+    permissions: [
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.SendMessagesInThreads,
+      PermissionFlagsBits.EmbedLinks,
+      PermissionFlagsBits.ReadMessageHistory,
+      PermissionFlagsBits.ManageThreads,
+      PermissionFlagsBits.ManageChannels,
+    ],
+  });
 }
 
 async function onPostCreated(thread: AnyThreadChannel) {

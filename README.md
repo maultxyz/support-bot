@@ -39,9 +39,9 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 ### 1. Discord application
 
 1. Create an application at <https://discord.com/developers/applications> and add a **Bot**.
-2. Under **Bot → Privileged Gateway Intents**, enable **Message Content Intent**.
-3. Invite the bot with the `bot` and `applications.commands` scopes and these permissions: View Channels, Send Messages, Send Messages in Threads, Embed Links, Read Message History, **Manage Threads** (needed to archive posts and edit their tags). **Manage Channels** is optional: it lets `/setup forum` create the `Resolved` and `Tracked` tags for you.
-4. Turn on Developer Mode, then copy the server ID for `DISCORD_GUILD_ID`.
+2. Under **Bot → Privileged Gateway Intents**, enable **Message Content Intent**. Without it, Discord refuses the connection and the bot exits with `Used disallowed intents`. Once the bot is in 100 or more servers, Discord requires verification before it grants this intent.
+3. Invite the bot to a server. On startup the bot prints a ready-made **invite link** in its logs. To build one by hand, use the `bot` and `applications.commands` scopes and these permissions: View Channels, Send Messages, Send Messages in Threads, Embed Links, Read Message History, **Manage Threads** (needed to archive posts and edit their tags). **Manage Channels** is optional: it lets `/setup forum add` create the `Resolved` and `Tracked` tags for you.
+4. To let other people invite the bot, leave **Public Bot** on under *Bot*. To keep it to servers you invite it to, turn it off.
 5. Once the bot is running, run `/setup forum add` for each forum. The reply tells you if the bot lacks permissions in that forum. Then run `/setup staff add` for each support role.
 
 ### 2. GitHub
@@ -109,4 +109,5 @@ src/
 ## Notes
 
 - Attachments are linked from the issue as Discord CDN URLs. These links can expire, so for long-lived issues, re-upload important screenshots to GitHub.
-- Slash commands are registered to `DISCORD_GUILD_ID` on startup, so changes show up immediately.
+- Slash commands are registered globally on startup, so they work in every server. Each server has its own forums and staff roles, set up with `/setup`. All servers file issues into the one repo set by `GITHUB_OWNER`/`GITHUB_REPO`.
+- When the bot is removed from a server, that server's forums, staff roles, and issue links are deleted. The GitHub issues themselves are left alone.

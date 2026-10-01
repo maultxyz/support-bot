@@ -17,7 +17,6 @@ const schema = z.object({
   DATABASE_PATH: z.string().default("./data/bot.db"),
 
   DISCORD_TOKEN: z.string().min(1),
-  DISCORD_GUILD_ID: z.string().min(1),
   RESOLVED_TAG_NAME: z.string().default("Resolved"),
   TRACKED_TAG_NAME: z.string().default("Tracked"),
 
