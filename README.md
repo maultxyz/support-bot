@@ -9,8 +9,9 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 - **Forum-based support.** Every new post in a registered forum gets a welcome message with **Track on GitHub** and **Mark resolved** buttons.
 - **Topic tagging prompt.** If a new post has no topic tag yet, the welcome message includes a menu of the forum's tags (e.g. `3D Model`, `Web`, `Server`, `Discord`). The author or staff pick up to 4, and the bot applies them. Topic tags are simply the forum's own tags, managed in the forum's Discord settings. The bot's status tags and any moderated tags are left out.
 - **Discord → GitHub**
-  - Staff turn a post into a GitHub issue. The post's title becomes the issue title, its first message and attachments become the issue body, and the issue is labelled by request type.
+  - Staff turn a post into a GitHub issue. The post's title becomes the issue title, its first message and attachments become the issue body, and the issue is labelled by request type plus the post's topic tags (e.g. `enhancement`, `3D Model`, `Web`).
   - `/issue link <number>` attaches a post to an issue that already exists.
+  - Topic tags added to a linked post later become labels on its issue. Removing a tag in Discord doesn't remove the label, so triage done on GitHub isn't undone. GitHub creates any label that doesn't exist yet.
   - Replies in a linked post are mirrored as issue comments.
   - `/resolve` (by staff) closes the linked issue as added or rejected.
 - **GitHub → Discord** (via webhook)

@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { Client, Events, GatewayIntentBits, OAuth2Scopes, PermissionFlagsBits, type AnyThreadChannel } from "discord.js";
 import { forums, links, removeGuildData, staffRoles } from "../db.js";
-import { logWarning, mirrorMessageToIssue } from "../sync.js";
+import { logWarning, mirrorMessageToIssue, syncTopicLabels } from "../sync.js";
 import { registerCommands } from "./commands.js";
 import { handleInteraction } from "./interactions.js";
 import { asForumThread, welcomeMessage } from "./util.js";
@@ -32,6 +32,10 @@ export function createDiscordClient() {
 
   client.on(Events.ThreadCreate, (thread, newlyCreated) => {
     if (newlyCreated) onPostCreated(thread).catch(logWarning("send welcome message"));
+  });
+
+  client.on(Events.ThreadUpdate, (oldThread, newThread) => {
+    syncTopicLabels(oldThread, newThread).catch(logWarning("sync topic labels to GitHub"));
   });
 
   client.on(Events.ThreadDelete, (thread) => links.removeByThread(thread.id));

@@ -1,7 +1,14 @@
 import type { AnyThreadChannel, Message, User } from "discord.js";
 import { config, type IssueKind } from "./config.js";
 import { links, type IssueLink } from "./db.js";
-import { issueStatus, KIND_LABEL, truncate, updateThread, type PostStatus } from "./discord/util.js";
+import {
+  appliedTopicNames,
+  issueStatus,
+  KIND_LABEL,
+  truncate,
+  updateThread,
+  type PostStatus,
+} from "./discord/util.js";
 import * as github from "./github.js";
 
 /** An expected failure whose message is safe to show to the Discord user. */
@@ -71,7 +78,12 @@ export async function createIssueForThread(
     const issue = await github.createIssue({
       title: title ?? thread.name,
       body: truncate(body.join("\n"), 60_000),
-      labels: kind === "feature" ? config.FEATURE_LABELS : config.SUPPORT_LABELS,
+      labels: [
+        ...new Set([
+          ...(kind === "feature" ? config.FEATURE_LABELS : config.SUPPORT_LABELS),
+          ...appliedTopicNames(thread),
+        ]),
+      ],
     });
 
     const link = links.create({
@@ -121,6 +133,7 @@ export async function linkExistingIssue(
       issueNumber,
       `🔗 Linked to Discord ${KIND_LABEL[kind]} [${thread.name}](${thread.url}) by **${actor.username}**.`,
     );
+    await github.addLabels(issueNumber, appliedTopicNames(thread)).catch(logWarning("add topic labels"));
     await updateThread(thread, { status: issueStatus(issue) }).catch(
       logWarning("update post status"),
     );
@@ -173,6 +186,19 @@ export async function resolveThread(
   }
 
   return { link, closedIssue, status };
+}
+
+/**
+ * Adds GitHub labels for topic tags newly applied to a linked post, whether picked from the
+ * welcome menu or edited by hand. Removing a tag leaves the label alone so GitHub-side triage isn't undone.
+ */
+export async function syncTopicLabels(oldThread: AnyThreadChannel, newThread: AnyThreadChannel) {
+  const link = links.byThread(newThread.id);
+  if (!link) return;
+
+  const before = appliedTopicNames(newThread, oldThread.appliedTags);
+  const added = appliedTopicNames(newThread).filter((name) => !before.includes(name));
+  await github.addLabels(link.issueNumber, added);
 }
 
 /** Mirrors a Discord reply in a linked thread as a GitHub issue comment. */

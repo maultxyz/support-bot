@@ -41,6 +41,12 @@ export async function commentOnIssue(issueNumber: number, body: string) {
   });
 }
 
+/** Adds labels without touching existing ones. GitHub creates any label that doesn't exist yet. */
+export async function addLabels(issueNumber: number, labels: string[]) {
+  if (labels.length === 0) return;
+  await octokit.rest.issues.addLabels({ ...repo, issue_number: issueNumber, labels });
+}
+
 export async function closeIssue(issueNumber: number, reason: "completed" | "not_planned" = "completed") {
   await octokit.rest.issues.update({
     ...repo,

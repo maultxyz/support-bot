@@ -148,6 +148,13 @@ export function topicTags(thread: AnyThreadChannel): GuildForumTag[] {
   return parent.availableTags.filter((tag) => !tag.moderated && !BOT_TAG_NAMES.includes(tag.name.toLowerCase()));
 }
 
+/** Names of the topic tags applied to a post, used as GitHub labels. */
+export function appliedTopicNames(thread: AnyThreadChannel, appliedTags = thread.appliedTags) {
+  return topicTags(thread)
+    .filter((tag) => appliedTags.includes(tag.id))
+    .map((tag) => tag.name);
+}
+
 /** Replaces the post's topic tags with `tagIds`, keeping status and other tags. */
 export async function setTopicTags(thread: AnyThreadChannel, tagIds: string[]) {
   const topicIds = topicTags(thread).map((tag) => tag.id);
