@@ -9,7 +9,9 @@ services:
     environment:
       DISCORD_TOKEN: ${DISCORD_TOKEN}
       RESOLVED_TAG_NAME: ${RESOLVED_TAG_NAME:-Resolved}
-      TRACKED_TAG_NAME: ${TRACKED_TAG_NAME:-Tracked}
+      PENDING_TAG_NAME: ${PENDING_TAG_NAME:-Pending}
+      ADDED_TAG_NAME: ${ADDED_TAG_NAME:-Added}
+      REJECTED_TAG_NAME: ${REJECTED_TAG_NAME:-Rejected}
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       GITHUB_OWNER: ${GITHUB_OWNER}
       GITHUB_REPO: ${GITHUB_REPO}
@@ -18,7 +20,6 @@ services:
       FEATURE_LABELS: ${FEATURE_LABELS:-enhancement}
       MIRROR_DISCORD_MESSAGES: ${MIRROR_DISCORD_MESSAGES:-true}
       MIRROR_GITHUB_COMMENTS: ${MIRROR_GITHUB_COMMENTS:-true}
-      ARCHIVE_ON_CLOSE: ${ARCHIVE_ON_CLOSE:-true}
     volumes:
       - bot-data:/app/data
 

@@ -4,8 +4,9 @@ import {
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Interaction,
+  type StringSelectMenuInteraction,
 } from "discord.js";
-import type { IssueKind } from "../config.js";
+import { config, type IssueKind } from "../config.js";
 import { links } from "../db.js";
 import { getIssue } from "../github.js";
 import {
@@ -14,31 +15,36 @@ import {
   resolveThread,
   SyncError,
   unlinkThread,
+  type CloseReason,
 } from "../sync.js";
 import { handleSetupCommand } from "./setup.js";
 import {
   asForumThread,
-  ButtonIds,
+  ComponentIds,
   Colors,
   isStaff,
   KIND_LABEL,
   linkEmbed,
-  resolveOnlyRow,
+  setTopicTags,
+  updateThread,
+  withoutComponent,
 } from "./util.js";
 
-type ThreadInteraction = ChatInputCommandInteraction | ButtonInteraction;
+type ThreadInteraction = ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
 
 export async function handleInteraction(interaction: Interaction) {
-  if (!interaction.isChatInputCommand() && !interaction.isButton()) return;
+  if (!interaction.isChatInputCommand() && !interaction.isButton() && !interaction.isStringSelectMenu()) return;
 
   try {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "setup" && interaction.inCachedGuild()) await handleSetupCommand(interaction);
       else if (interaction.commandName === "issue") await handleIssueCommand(interaction);
       else if (interaction.commandName === "resolve") await handleResolve(interaction);
-    } else if (interaction.customId === ButtonIds.createIssue) {
+    } else if (interaction.isStringSelectMenu()) {
+      if (interaction.customId === ComponentIds.topics) await handleTopicSelect(interaction);
+    } else if (interaction.customId === ComponentIds.createIssue) {
       await handleCreateButton(interaction);
-    } else if (interaction.customId === ButtonIds.resolve) {
+    } else if (interaction.customId === ComponentIds.resolve) {
       await handleResolve(interaction);
     }
   } catch (error) {
@@ -144,7 +150,31 @@ async function handleCreateButton(interaction: ButtonInteraction) {
   await interaction.editReply({ embeds: [linkEmbed(link, "GitHub issue created")] });
 
   // Drop the "Track on GitHub" button from the welcome message now that it's done.
-  await interaction.message.edit({ components: [resolveOnlyRow()] }).catch(() => {});
+  await interaction.message
+    .edit({ components: withoutComponent(interaction.message, ComponentIds.createIssue) })
+    .catch(() => {});
+}
+
+async function handleTopicSelect(interaction: StringSelectMenuInteraction) {
+  const { thread } = requireForumThread(interaction);
+  if (!isStaff(interaction) && interaction.user.id !== thread.ownerId) {
+    throw new SyncError("Only the person who opened this post or staff can choose its tags.");
+  }
+
+  const applied = await setTopicTags(thread, interaction.values);
+  const [welcome] = interaction.message.embeds;
+
+  // Swap the prompt for the chosen tags and drop the menu; tags can still be edited from the post itself.
+  const embed = welcome ? EmbedBuilder.from(welcome) : new EmbedBuilder().setColor(Colors.brand);
+  embed.setFields({
+    name: "🏷️ Tagged as",
+    value: applied.map((tag) => `${tag.emoji?.name ?? ""} **${tag.name}**`.trim()).join(", ") || "No tags",
+  });
+
+  await interaction.update({
+    embeds: [embed],
+    components: withoutComponent(interaction.message, ComponentIds.topics),
+  });
 }
 
 async function handleResolve(interaction: ThreadInteraction) {
@@ -154,18 +184,31 @@ async function handleResolve(interaction: ThreadInteraction) {
     throw new SyncError("Only the person who opened this post or staff can resolve it.");
   }
 
-  const closeIssue =
-    staff && (interaction.isChatInputCommand() ? (interaction.options.getBoolean("close_issue") ?? true) : true);
+  const options = interaction.isChatInputCommand() ? interaction.options : null;
+  const closeIssue = staff && (options?.getBoolean("close_issue") ?? true);
+  const reason: CloseReason = (staff && (options?.getString("outcome") as CloseReason | null)) || "completed";
 
   await interaction.deferReply();
-  const { link, closedIssue } = await resolveThread(thread, interaction.user, closeIssue);
+  const { link, closedIssue, status } = await resolveThread(thread, interaction.user, { closeIssue, reason });
+  const rejected = status === "REJECTED";
 
-  const lines = [`Marked as resolved by ${interaction.user}. This post is now closed.`];
+  const lines = [`${rejected ? "Rejected" : "Marked as resolved"} by ${interaction.user}. This post is now closed.`];
   if (closedIssue && link) lines.push(`Closed [${link.repo}#${link.issueNumber}](${link.issueUrl}).`);
   lines.push("Send a message here if you need to reopen it.");
 
   await interaction.editReply({
-    embeds: [new EmbedBuilder().setColor(Colors.merged).setTitle("Resolved").setDescription(lines.join("\n"))],
+    embeds: [
+      new EmbedBuilder()
+        .setColor(rejected ? Colors.muted : Colors.merged)
+        .setTitle(rejected ? "Rejected" : "Resolved")
+        .setDescription(lines.join("\n")),
+    ],
   });
-  await thread.setArchived(true, `Resolved by ${interaction.user.username}`);
+  await updateThread(thread, {
+    status,
+    // Linked posts show their issue status instead of the generic Resolved tag.
+    addTags: status ? [] : [config.RESOLVED_TAG_NAME],
+    archived: true,
+    reason: `Resolved by ${interaction.user.username}`,
+  });
 }

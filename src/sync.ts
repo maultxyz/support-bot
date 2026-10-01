@@ -1,7 +1,7 @@
 import type { AnyThreadChannel, Message, User } from "discord.js";
 import { config, type IssueKind } from "./config.js";
 import { links, type IssueLink } from "./db.js";
-import { KIND_LABEL, setTag, truncate } from "./discord/util.js";
+import { issueStatus, KIND_LABEL, truncate, updateThread, type PostStatus } from "./discord/util.js";
 import * as github from "./github.js";
 
 /** An expected failure whose message is safe to show to the Discord user. */
@@ -84,7 +84,9 @@ export async function createIssueForThread(
       createdBy: actor.id,
     });
 
-    await setTag(thread, config.TRACKED_TAG_NAME, true).catch(logWarning("apply tracked tag"));
+    await updateThread(thread, { status: "PENDING" }).catch(
+      logWarning("update post status"),
+    );
     return link;
   });
 }
@@ -119,7 +121,9 @@ export async function linkExistingIssue(
       issueNumber,
       `🔗 Linked to Discord ${KIND_LABEL[kind]} [${thread.name}](${thread.url}) by **${actor.username}**.`,
     );
-    await setTag(thread, config.TRACKED_TAG_NAME, true).catch(logWarning("apply tracked tag"));
+    await updateThread(thread, { status: issueStatus(issue) }).catch(
+      logWarning("update post status"),
+    );
     return link;
   });
 }
@@ -128,33 +132,47 @@ export async function unlinkThread(thread: AnyThreadChannel): Promise<IssueLink>
   const link = links.byThread(thread.id);
   if (!link) throw new SyncError("This thread isn't linked to a GitHub issue.");
   links.removeByThread(thread.id);
-  await setTag(thread, config.TRACKED_TAG_NAME, false).catch(logWarning("remove tracked tag"));
+  await updateThread(thread, { status: null }).catch(
+    logWarning("clear post status"),
+  );
   return link;
 }
 
+export type CloseReason = "completed" | "not_planned";
+
 /**
- * Tags the thread as resolved and optionally closes the linked issue.
- * Archiving is left to the caller so it can reply to the interaction first.
+ * Optionally closes the linked issue and works out the post's resulting status.
+ * Closing the post itself is left to the caller so it can reply to the interaction first.
  */
-export async function resolveThread(thread: AnyThreadChannel, actor: User, closeLinkedIssue: boolean) {
+export async function resolveThread(
+  thread: AnyThreadChannel,
+  actor: User,
+  options: { closeIssue: boolean; reason: CloseReason },
+) {
   const link = links.byThread(thread.id);
   let closedIssue = false;
+  let status: PostStatus | undefined;
 
-  if (link && closeLinkedIssue) {
+  if (link) {
     const issue = await github.getIssue(link.issueNumber);
-    if (issue?.state === "open") {
+    if (issue?.state === "open" && options.closeIssue) {
+      const rejected = options.reason === "not_planned";
       await github.commentOnIssue(
         link.issueNumber,
-        `✅ Marked as resolved on Discord by **${actor.username}**.`,
+        rejected
+          ? `🚫 Rejected on Discord by **${actor.username}**.`
+          : `✅ Marked as resolved on Discord by **${actor.username}**.`,
       );
       expectGithubEvent(`closed:${link.issueNumber}`);
-      await github.closeIssue(link.issueNumber);
+      await github.closeIssue(link.issueNumber, options.reason);
       closedIssue = true;
+      status = rejected ? "REJECTED" : "ADDED";
+    } else if (issue) {
+      status = issueStatus(issue);
     }
   }
 
-  await setTag(thread, config.RESOLVED_TAG_NAME, true).catch(logWarning("apply resolved tag"));
-  return { link, closedIssue };
+  return { link, closedIssue, status };
 }
 
 /** Mirrors a Discord reply in a linked thread as a GitHub issue comment. */

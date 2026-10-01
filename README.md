@@ -5,16 +5,18 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 ## Features
 
 - **Configured from Discord.** Use `/setup forum add` to register any number of support or feature-request forums, and `/setup staff add` to choose which roles count as staff. Neither needs env vars.
+- **Status tags.** Posts linked to an issue are tagged `Pending` while the issue is open, `Added` when it's closed as completed, and `Rejected` when it's closed as not planned or a duplicate. The bot never changes post titles. Posts resolved without a linked issue get the `Resolved` tag.
 - **Forum-based support.** Every new post in a registered forum gets a welcome message with **Track on GitHub** and **Mark resolved** buttons.
+- **Topic tagging prompt.** If a new post has no topic tag yet, the welcome message includes a menu of the forum's tags (e.g. `3D Model`, `Web`, `Server`, `Discord`). The author or staff pick up to 4, and the bot applies them. Topic tags are simply the forum's own tags, managed in the forum's Discord settings. The bot's status tags and any moderated tags are left out.
 - **Discord → GitHub**
   - Staff turn a post into a GitHub issue. The post's title becomes the issue title, its first message and attachments become the issue body, and the issue is labelled by request type.
   - `/issue link <number>` attaches a post to an issue that already exists.
   - Replies in a linked post are mirrored as issue comments.
-  - `/resolve` (by staff) closes the linked issue.
+  - `/resolve` (by staff) closes the linked issue as added or rejected.
 - **GitHub → Discord** (via webhook)
   - New issue comments are posted into the thread.
-  - When the issue is closed, the bot posts a notice, tags the post `Resolved`, and archives it.
-  - When the issue is reopened, the bot unarchives the post and removes the `Resolved` tag.
+  - When the issue is closed, the bot posts a notice, swaps the tag to `Added` or `Rejected`, and closes the post.
+  - When the issue is reopened, the bot reopens the post and sets the tag back to `Pending`.
 - **No echo loops.** Comments the bot writes on GitHub carry a hidden marker, and issue closes the bot triggers itself are skipped, so nothing gets mirrored twice.
 
 ## Commands
@@ -30,7 +32,7 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 | `/issue link <number>` | Staff | Link this post to an existing issue |
 | `/issue unlink` | Staff | Remove the link (the issue is left untouched) |
 | `/issue status` | Staff | Show the linked issue's state, labels, and assignees |
-| `/resolve [close_issue]` | Post author or staff | Tag the post Resolved and archive it. Staff also close the linked issue (default `true`) |
+| `/resolve [outcome] [close_issue]` | Post author or staff | Close the post. Staff also close the linked issue (default `true`), as **Added** (default) or **Rejected**. The status tag updates to match |
 
 **Staff** means members with a role added through `/setup staff add`, plus anyone with **Manage Threads** (so moderators work before any roles are set up). Staff can use `/issue` and resolve any post. Everyone can see `/issue`, but the bot rejects non-staff when they run it. `/setup` is hidden from members without Manage Server. To change that, go to *Server Settings → Integrations*.
 
@@ -40,7 +42,7 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 
 1. Create an application at <https://discord.com/developers/applications> and add a **Bot**.
 2. Under **Bot → Privileged Gateway Intents**, enable **Message Content Intent**. Without it, Discord refuses the connection and the bot exits with `Used disallowed intents`. Once the bot is in 100 or more servers, Discord requires verification before it grants this intent.
-3. Invite the bot to a server. On startup the bot prints a ready-made **invite link** in its logs. To build one by hand, use the `bot` and `applications.commands` scopes and these permissions: View Channels, Send Messages, Send Messages in Threads, Embed Links, Read Message History, **Manage Threads** (needed to archive posts and edit their tags). **Manage Channels** is optional: it lets `/setup forum add` create the `Resolved` and `Tracked` tags for you.
+3. Invite the bot to a server. On startup the bot prints a ready-made **invite link** in its logs. To build one by hand, use the `bot` and `applications.commands` scopes and these permissions: View Channels, Send Messages, Send Messages in Threads, Embed Links, Read Message History, **Manage Threads** (needed to archive posts and edit their tags). **Manage Channels** is optional: it lets `/setup forum add` create the `Pending`, `Added`, `Rejected`, and `Resolved` tags for you. The status tags are created as moderated, so only staff can apply them by hand.
 4. To let other people invite the bot, leave **Public Bot** on under *Bot*. To keep it to servers you invite it to, turn it off.
 5. Once the bot is running, run `/setup forum add` for each forum. The reply tells you if the bot lacks permissions in that forum. Then run `/setup staff add` for each support role.
 

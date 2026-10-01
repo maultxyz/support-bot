@@ -44,6 +44,15 @@ export const commands = [
     .setName("resolve")
     .setDescription("Mark this post as resolved and close it")
     .setContexts(InteractionContextType.Guild)
+    .addStringOption((opt) =>
+      opt
+        .setName("outcome")
+        .setDescription("How the linked GitHub issue is closed (staff only, default: added)")
+        .addChoices(
+          { name: "Added / fixed", value: "completed" },
+          { name: "Rejected / won't do", value: "not_planned" },
+        ),
+    )
     .addBooleanOption((opt) =>
       opt
         .setName("close_issue")
@@ -83,7 +92,7 @@ export const commands = [
             .addBooleanOption((opt) =>
               opt
                 .setName("create_tags")
-                .setDescription("Create the resolved/tracked tags in this forum if missing (default: true)"),
+                .setDescription("Create the bot's status and resolved tags if missing (default: true)"),
             ),
         )
         .addSubcommand((sub) =>

@@ -72,7 +72,7 @@ async function onPostCreated(thread: AnyThreadChannel) {
   for (let attempt = 0; attempt < 3; attempt++) {
     await sleep(1_500);
     try {
-      await thread.send(welcomeMessage(context.kind));
+      await thread.send(welcomeMessage(context.kind, thread));
       return;
     } catch (error) {
       if (attempt === 2) throw error;

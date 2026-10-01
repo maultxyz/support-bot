@@ -18,7 +18,9 @@ const schema = z.object({
 
   DISCORD_TOKEN: z.string().min(1),
   RESOLVED_TAG_NAME: z.string().default("Resolved"),
-  TRACKED_TAG_NAME: z.string().default("Tracked"),
+  PENDING_TAG_NAME: z.string().default("Pending"),
+  ADDED_TAG_NAME: z.string().default("Added"),
+  REJECTED_TAG_NAME: z.string().default("Rejected"),
 
   GITHUB_TOKEN: z.string().min(1),
   GITHUB_OWNER: z.string().min(1),
@@ -29,7 +31,6 @@ const schema = z.object({
 
   MIRROR_DISCORD_MESSAGES: z.stringbool().default(true),
   MIRROR_GITHUB_COMMENTS: z.stringbool().default(true),
-  ARCHIVE_ON_CLOSE: z.stringbool().default(true),
 });
 
 const parsed = schema.safeParse(process.env);

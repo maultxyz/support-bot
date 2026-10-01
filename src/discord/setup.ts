@@ -22,6 +22,14 @@ const REQUIRED_PERMISSIONS = {
 
 const MAX_FORUM_TAGS = 20;
 
+/** Tags the bot applies. Status tags are moderated so members can't set them on their own posts. */
+const BOT_TAGS = [
+  { name: config.PENDING_TAG_NAME, moderated: true },
+  { name: config.ADDED_TAG_NAME, moderated: true },
+  { name: config.REJECTED_TAG_NAME, moderated: true },
+  { name: config.RESOLVED_TAG_NAME, moderated: false },
+];
+
 export async function handleSetupCommand(interaction: ChatInputCommandInteraction<"cached">) {
   const group = interaction.options.getSubcommandGroup();
   const subcommand = interaction.options.getSubcommand();
@@ -59,8 +67,8 @@ async function addForum(interaction: ChatInputCommandInteraction<"cached">) {
     notes.push(`⚠️ I'm missing these permissions in ${forum}: **${missing.join(", ")}**.`);
   }
 
-  const missingTags = [config.RESOLVED_TAG_NAME, config.TRACKED_TAG_NAME].filter(
-    (name) => !forum.availableTags.some((tag) => tag.name.toLowerCase() === name.toLowerCase()),
+  const missingTags = BOT_TAGS.filter(
+    ({ name }) => !forum.availableTags.some((tag) => tag.name.toLowerCase() === name.toLowerCase()),
   );
   if (missingTags.length) notes.push(await addTags(forum, missingTags, createTags));
 
@@ -76,16 +84,16 @@ async function addForum(interaction: ChatInputCommandInteraction<"cached">) {
   });
 }
 
-async function addTags(forum: ForumChannel, names: string[], create: boolean) {
-  const list = names.map((name) => `\`${name}\``).join(", ");
+async function addTags(forum: ForumChannel, tags: typeof BOT_TAGS, create: boolean) {
+  const list = tags.map(({ name }) => `\`${name}\``).join(", ");
   if (!create) return `ℹ️ Tags ${list} don't exist in this forum, so they won't be applied.`;
 
-  if (forum.availableTags.length + names.length > MAX_FORUM_TAGS) {
+  if (forum.availableTags.length + tags.length > MAX_FORUM_TAGS) {
     return `⚠️ Couldn't add tags ${list}: this forum already has the maximum of ${MAX_FORUM_TAGS} tags.`;
   }
 
   try {
-    await forum.setAvailableTags([...forum.availableTags, ...names.map((name) => ({ name }))]);
+    await forum.setAvailableTags([...forum.availableTags, ...tags]);
     return `🏷️ Created tags ${list}.`;
   } catch {
     return `⚠️ Couldn't create tags ${list}. Give me **Manage Channels** or create them yourself.`;

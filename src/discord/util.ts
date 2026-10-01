@@ -2,13 +2,18 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ComponentType,
   EmbedBuilder,
   PermissionFlagsBits,
+  StringSelectMenuBuilder,
   type AnyThreadChannel,
   type BaseInteraction,
   type Channel,
+  type GuildForumTag,
+  type Message,
+  type ThreadEditOptions,
 } from "discord.js";
-import type { IssueKind } from "../config.js";
+import { config, type IssueKind } from "../config.js";
 import { forums, staffRoles, type IssueLink } from "../db.js";
 
 export const Colors = {
@@ -18,9 +23,10 @@ export const Colors = {
   muted: 0x6e7781,
 } as const;
 
-export const ButtonIds = {
+export const ComponentIds = {
   createIssue: "support:create-issue",
   resolve: "support:resolve",
+  topics: "support:topics",
 } as const;
 
 export const KIND_LABEL: Record<IssueKind, string> = {
@@ -45,22 +51,68 @@ export function isStaff(interaction: BaseInteraction): boolean {
   return memberRoleIds.some((id) => staffRoleIds.includes(id));
 }
 
-/** Adds or removes a forum tag by name. Silently does nothing if the forum has no such tag. */
-export async function setTag(thread: AnyThreadChannel, tagName: string, enabled: boolean) {
+/** Status of the GitHub issue linked to a post, shown as a forum tag. */
+export type PostStatus = "PENDING" | "ADDED" | "REJECTED";
+
+export const STATUS_TAGS: Record<PostStatus, string> = {
+  PENDING: config.PENDING_TAG_NAME,
+  ADDED: config.ADDED_TAG_NAME,
+  REJECTED: config.REJECTED_TAG_NAME,
+};
+
+/** Maps a GitHub issue's state to the post status. */
+export function issueStatus(issue: { state: string; state_reason?: string | null }): PostStatus {
+  if (issue.state === "open") return "PENDING";
+  return issue.state_reason === "not_planned" || issue.state_reason === "duplicate" ? "REJECTED" : "ADDED";
+}
+
+function tagIds(thread: AnyThreadChannel, names: string[]) {
   const parent = thread.parent;
-  if (!parent || !("availableTags" in parent)) return;
+  if (!parent || !("availableTags" in parent)) return [];
+  const wanted = names.map((name) => name.toLowerCase());
+  return parent.availableTags.filter((tag) => wanted.includes(tag.name.toLowerCase())).map((tag) => tag.id);
+}
 
-  const tag = parent.availableTags.find((t) => t.name.toLowerCase() === tagName.toLowerCase());
-  if (!tag) return;
+export interface ThreadUpdate {
+  /** Status tag to apply (replacing any other status tag); `null` removes them all. */
+  status?: PostStatus | null;
+  /** Forum tag names to add/remove. Tags the forum doesn't have are skipped. */
+  addTags?: string[];
+  removeTags?: string[];
+  /** `true` closes the post, `false` reopens it. */
+  archived?: boolean;
+  reason?: string;
+}
 
-  const applied = thread.appliedTags;
-  if (applied.includes(tag.id) === enabled) return;
-  // Discord allows at most 5 tags per post; don't drop the author's own tags to make room.
-  if (enabled && applied.length >= 5) return;
+/** Applies tag and open/closed changes to a post in as few requests as possible. */
+export async function updateThread(thread: AnyThreadChannel, update: ThreadUpdate) {
+  const edit: ThreadEditOptions = {};
 
-  await thread.setAppliedTags(
-    enabled ? [...applied, tag.id] : applied.filter((id) => id !== tag.id),
-  );
+  const addNames = [...(update.addTags ?? [])];
+  const removeNames = [...(update.removeTags ?? [])];
+  if (update.status !== undefined) {
+    for (const [status, name] of Object.entries(STATUS_TAGS)) {
+      (status === update.status ? addNames : removeNames).push(name);
+    }
+  }
+
+  const add = tagIds(thread, addNames);
+  const remove = tagIds(thread, removeNames);
+  const current = thread.appliedTags;
+  // Discord allows at most 5 tags per post; never drop the author's own tags to make room.
+  const next = [...current.filter((id) => !remove.includes(id))];
+  for (const id of add) if (!next.includes(id) && next.length < 5) next.push(id);
+  if (next.length !== current.length || next.some((id) => !current.includes(id))) edit.appliedTags = next;
+
+  let archived = thread.archived ?? false;
+  // An archived post can only be edited by a request that also reopens it.
+  if (archived && edit.appliedTags && update.archived !== false) {
+    await thread.setArchived(false, update.reason);
+    archived = false;
+  }
+  if (update.archived !== undefined && update.archived !== archived) edit.archived = update.archived;
+
+  if (Object.keys(edit).length) await thread.edit({ ...edit, reason: update.reason });
 }
 
 /** Unarchives a thread so the bot can post in it and edit its tags. */
@@ -83,7 +135,63 @@ export function linkEmbed(link: IssueLink, title: string) {
     );
 }
 
-export function welcomeMessage(kind: IssueKind) {
+/** Tags the bot manages itself; everything else non-moderated in a forum is a topic tag. */
+const BOT_TAG_NAMES = [...Object.values(STATUS_TAGS), config.RESOLVED_TAG_NAME].map((name) => name.toLowerCase());
+
+/** Discord allows 5 tags per post; leave one slot for the status/resolved tag. */
+const MAX_TOPICS = 4;
+
+/** Forum tags members can pick to say what a post is about (e.g. 3D Model, Web, Server). */
+export function topicTags(thread: AnyThreadChannel): GuildForumTag[] {
+  const parent = thread.parent;
+  if (!parent || !("availableTags" in parent)) return [];
+  return parent.availableTags.filter((tag) => !tag.moderated && !BOT_TAG_NAMES.includes(tag.name.toLowerCase()));
+}
+
+/** Replaces the post's topic tags with `tagIds`, keeping status and other tags. */
+export async function setTopicTags(thread: AnyThreadChannel, tagIds: string[]) {
+  const topicIds = topicTags(thread).map((tag) => tag.id);
+  const kept = thread.appliedTags.filter((id) => !topicIds.includes(id));
+  const chosen = tagIds.filter((id) => topicIds.includes(id)).slice(0, MAX_TOPICS);
+  await thread.setAppliedTags([...kept, ...chosen].slice(0, 5));
+  return topicTags(thread).filter((tag) => chosen.includes(tag.id));
+}
+
+function topicMenu(tags: GuildForumTag[]) {
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(ComponentIds.topics)
+      .setPlaceholder("What is this about? Pick the tags that fit")
+      .setMinValues(1)
+      .setMaxValues(Math.min(tags.length, MAX_TOPICS))
+      .addOptions(
+        tags.slice(0, 25).map((tag) => ({
+          label: tag.name,
+          value: tag.id,
+          emoji: tag.emoji?.id ? { id: tag.emoji.id } : tag.emoji?.name ? { name: tag.emoji.name } : undefined,
+        })),
+      ),
+  );
+}
+
+/** Removes one component (by custom ID) from a message, dropping rows that end up empty. */
+export function withoutComponent(message: Message, customId: string) {
+  return message.components
+    .map((row) => row.toJSON())
+    .map((row) =>
+      row.type === ComponentType.ActionRow
+        ? { ...row, components: row.components.filter((c) => !("custom_id" in c) || c.custom_id !== customId) }
+        : row,
+    )
+    .filter((row) => row.type !== ComponentType.ActionRow || row.components.length > 0);
+}
+
+export function welcomeMessage(kind: IssueKind, thread: AnyThreadChannel) {
+  const topics = topicTags(thread);
+  const topicIds = topics.map((tag) => tag.id);
+  // Only ask for topics if the forum has some and the author didn't already pick one.
+  const askForTopics = topics.length > 0 && !thread.appliedTags.some((id) => topicIds.includes(id));
+
   const embed = new EmbedBuilder()
     .setColor(Colors.brand)
     .setTitle(kind === "support" ? "Thanks for reaching out!" : "Thanks for the suggestion!")
@@ -95,22 +203,20 @@ export function welcomeMessage(kind: IssueKind) {
         : "The team will review your request. Other members can show support by reacting to the post.\n\n" +
             "If you no longer need this, press **Mark resolved** or use `/resolve`.",
     );
+  if (askForTopics) {
+    embed.addFields({
+      name: "🏷️ What is this about?",
+      value: "Pick the tags that fit from the menu below so the right people see your post.",
+    });
+  }
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+  const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(ButtonIds.createIssue)
+      .setCustomId(ComponentIds.createIssue)
       .setLabel("Track on GitHub")
       .setStyle(ButtonStyle.Secondary),
-    resolveButton(),
+    new ButtonBuilder().setCustomId(ComponentIds.resolve).setLabel("Mark resolved").setStyle(ButtonStyle.Success),
   );
 
-  return { embeds: [embed], components: [row] };
-}
-
-function resolveButton() {
-  return new ButtonBuilder().setCustomId(ButtonIds.resolve).setLabel("Mark resolved").setStyle(ButtonStyle.Success);
-}
-
-export function resolveOnlyRow() {
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(resolveButton());
+  return { embeds: [embed], components: askForTopics ? [topicMenu(topics), buttons] : [buttons] };
 }

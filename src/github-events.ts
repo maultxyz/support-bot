@@ -1,9 +1,9 @@
 import { EmbedBuilder, type AnyThreadChannel, type Client } from "discord.js";
 import { config } from "./config.js";
 import { links, type IssueLink } from "./db.js";
-import { Colors, ensureOpen, setTag, truncate } from "./discord/util.js";
+import { Colors, ensureOpen, issueStatus, truncate, updateThread } from "./discord/util.js";
 import { repoSlug, SYNC_MARKER } from "./github.js";
-import { consumeExpectedEvent, logWarning } from "./sync.js";
+import { consumeExpectedEvent } from "./sync.js";
 
 // Only the fields this bot reads from GitHub's webhook payloads.
 interface GithubUser {
@@ -56,32 +56,43 @@ export async function handleGithubEvent(client: Client, event: string, payload: 
 
 type Handler = (thread: AnyThreadChannel, link: IssueLink, payload: IssuesPayload) => Promise<void>;
 
+const CLOSE_LABEL: Record<string, string> = {
+  completed: "completed",
+  not_planned: "closed as not planned",
+  duplicate: "closed as a duplicate",
+};
+
 const onIssueClosed: Handler = async (thread, link, { issue, sender }) => {
-  // The bot closed it from /resolve; the thread has already been handled.
+  // The bot closed it from /resolve; the post has already been handled.
   if (consumeExpectedEvent(`closed:${link.issueNumber}`)) return;
 
-  const completed = issue.state_reason !== "not_planned";
+  const status = issueStatus({ state: "closed", state_reason: issue.state_reason });
   await ensureOpen(thread);
   await thread.send({
     embeds: [
       new EmbedBuilder()
-        .setColor(completed ? Colors.merged : Colors.muted)
+        .setColor(status === "ADDED" ? Colors.merged : Colors.muted)
         .setAuthor({ name: sender.login, iconURL: sender.avatar_url, url: sender.html_url })
-        .setTitle(`Issue #${issue.number} closed${completed ? "" : " as not planned"}`)
+        .setTitle(`Issue #${issue.number} ${CLOSE_LABEL[issue.state_reason ?? ""] ?? "closed"}`)
         .setURL(issue.html_url)
-        .setDescription(truncate(issue.title, 4096)),
+        .setDescription(`${truncate(issue.title, 3900)}\n\nThis post is now closed.`),
     ],
   });
 
-  if (config.ARCHIVE_ON_CLOSE) {
-    if (completed) await setTag(thread, config.RESOLVED_TAG_NAME, true).catch(logWarning("apply resolved tag"));
-    await thread.setArchived(true, `GitHub issue #${issue.number} closed`);
-  }
+  await updateThread(thread, {
+    status,
+    archived: true,
+    reason: `GitHub issue #${issue.number} closed`,
+  });
 };
 
 const onIssueReopened: Handler = async (thread, _link, { issue, sender }) => {
-  await ensureOpen(thread);
-  await setTag(thread, config.RESOLVED_TAG_NAME, false).catch(logWarning("remove resolved tag"));
+  await updateThread(thread, {
+    status: "PENDING",
+    removeTags: [config.RESOLVED_TAG_NAME],
+    archived: false,
+    reason: `GitHub issue #${issue.number} reopened`,
+  });
   await thread.send({
     embeds: [
       new EmbedBuilder()
