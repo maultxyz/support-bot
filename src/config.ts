@@ -23,8 +23,9 @@ const schema = z.object({
   REJECTED_TAG_NAME: z.string().default("Rejected"),
 
   GITHUB_TOKEN: z.string().min(1),
-  GITHUB_OWNER: z.string().min(1),
-  GITHUB_REPO: z.string().min(1),
+  // Default repo for forums registered without one. Each forum can set its own with /setup forum add.
+  GITHUB_OWNER: z.string().optional(),
+  GITHUB_REPO: z.string().optional(),
   GITHUB_WEBHOOK_SECRET: z.string().min(1),
   SUPPORT_LABELS: list("support"),
   FEATURE_LABELS: list("enhancement"),
@@ -36,6 +37,11 @@ const schema = z.object({
 const parsed = schema.safeParse(process.env);
 if (!parsed.success) {
   console.error("Invalid configuration:\n" + z.prettifyError(parsed.error));
+  process.exit(1);
+}
+
+if (Boolean(parsed.data.GITHUB_OWNER) !== Boolean(parsed.data.GITHUB_REPO)) {
+  console.error("Invalid configuration: set both GITHUB_OWNER and GITHUB_REPO, or neither.");
   process.exit(1);
 }
 

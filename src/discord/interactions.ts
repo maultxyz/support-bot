@@ -9,10 +9,12 @@ import {
   type User,
 } from "discord.js";
 import { config, type IssueKind } from "../config.js";
-import { links } from "../db.js";
+import { links, posts } from "../db.js";
 import { getIssue } from "../github.js";
 import { createIssueForThread, linkExistingIssue, resolveThread, SyncError, unlinkThread } from "../sync.js";
+import { INACTIVE_REASON, reactivatePost } from "../tracking.js";
 import { handleSetupCommand } from "./setup.js";
+import { handleStatsCommand } from "./stats.js";
 import {
   asForumThread,
   ComponentIds,
@@ -24,6 +26,7 @@ import {
   resolveReasonPicker,
   setTopicTags,
   updateThread,
+  WelcomeFields,
   withoutComponent,
   type ResolveReason,
 } from "./util.js";
@@ -38,6 +41,10 @@ export async function handleInteraction(interaction: Interaction) {
       if (interaction.commandName === "setup" && interaction.inCachedGuild()) await handleSetupCommand(interaction);
       else if (interaction.commandName === "issue") await handleIssueCommand(interaction);
       else if (interaction.commandName === "resolve") await handleResolve(interaction);
+      else if (interaction.commandName === "stats" && interaction.inCachedGuild()) {
+        requireStaff(interaction, "Only staff can see support stats.");
+        await handleStatsCommand(interaction);
+      }
     } else if (interaction.isStringSelectMenu()) {
       if (interaction.customId === ComponentIds.topics) await handleTopicSelect(interaction);
     } else if (interaction.customId === ComponentIds.createIssue) {
@@ -46,6 +53,8 @@ export async function handleInteraction(interaction: Interaction) {
       await handleResolve(interaction);
     } else if (interaction.customId.startsWith(ComponentIds.resolveAs)) {
       await handleResolveAs(interaction);
+    } else if (interaction.customId === ComponentIds.reactivate) {
+      await handleReactivate(interaction);
     }
   } catch (error) {
     const content =
@@ -66,8 +75,13 @@ function requireForumThread(interaction: ThreadInteraction) {
   return context;
 }
 
-function requireStaff(interaction: ThreadInteraction) {
-  if (!isStaff(interaction)) throw new SyncError("Only staff can manage GitHub issues.");
+function requireStaff(interaction: ThreadInteraction, message = "Only staff can manage GitHub issues.") {
+  if (!isStaff(interaction)) throw new SyncError(message);
+}
+
+function requireRepo(repo: string | null) {
+  if (!repo) throw new SyncError("This forum has no GitHub repo yet. Set one with `/setup forum add`.");
+  return repo;
 }
 
 function requireUnlinked(threadId: string) {
@@ -76,7 +90,7 @@ function requireUnlinked(threadId: string) {
 }
 
 async function handleIssueCommand(interaction: ChatInputCommandInteraction) {
-  const { thread, kind } = requireForumThread(interaction);
+  const { thread, kind, repo } = requireForumThread(interaction);
   const subcommand = interaction.options.getSubcommand();
 
   if (subcommand === "status") return showStatus(interaction, thread.id);
@@ -89,15 +103,16 @@ async function handleIssueCommand(interaction: ChatInputCommandInteraction) {
       await interaction.deferReply();
       const type = (interaction.options.getString("type") as IssueKind | null) ?? kind;
       const title = interaction.options.getString("title") ?? undefined;
-      const link = await createIssueForThread(thread, type, interaction.user, title);
+      const link = await createIssueForThread(thread, type, requireRepo(repo), interaction.user, title);
       await interaction.editReply({ embeds: [linkEmbed(link, "GitHub issue created")] });
       return;
     }
     case "link": {
       requireUnlinked(thread.id);
+      const target = requireRepo(repo);
       await interaction.deferReply();
       const number = interaction.options.getInteger("number", true);
-      const link = await linkExistingIssue(thread, kind, number, interaction.user);
+      const link = await linkExistingIssue(thread, kind, target, number, interaction.user);
       await interaction.editReply({ embeds: [linkEmbed(link, "Linked to GitHub issue")] });
       return;
     }
@@ -116,7 +131,7 @@ async function showStatus(interaction: ChatInputCommandInteraction, threadId: st
   if (!link) throw new SyncError("This post isn't linked to a GitHub issue.");
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const issue = await getIssue(link.issueNumber);
+  const issue = await getIssue(link.repo, link.issueNumber);
   if (!issue) throw new SyncError(`Issue #${link.issueNumber} no longer exists. Use \`/issue unlink\` to clear it.`);
 
   const open = issue.state === "open";
@@ -141,12 +156,13 @@ async function showStatus(interaction: ChatInputCommandInteraction, threadId: st
 }
 
 async function handleCreateButton(interaction: ButtonInteraction) {
-  const { thread, kind } = requireForumThread(interaction);
+  const { thread, kind, repo } = requireForumThread(interaction);
   requireStaff(interaction);
   requireUnlinked(thread.id);
+  const target = requireRepo(repo);
 
   await interaction.deferReply();
-  const link = await createIssueForThread(thread, kind, interaction.user);
+  const link = await createIssueForThread(thread, kind, target, interaction.user);
   await interaction.editReply({ embeds: [linkEmbed(link, "GitHub issue created")] });
 
   // Drop the "Track on GitHub" button from the welcome message now that it's done.
@@ -166,10 +182,13 @@ async function handleTopicSelect(interaction: StringSelectMenuInteraction) {
 
   // Swap the prompt for the chosen tags and drop the menu; tags can still be edited from the post itself.
   const embed = welcome ? EmbedBuilder.from(welcome) : new EmbedBuilder().setColor(Colors.brand);
-  embed.setFields({
-    name: "🏷️ Tagged as",
-    value: applied.map((tag) => `${tag.emoji?.name ?? ""} **${tag.name}**`.trim()).join(", ") || "No tags",
-  });
+  embed.setFields(
+    ...(welcome?.fields ?? []).filter((field) => field.name !== WelcomeFields.topicPrompt),
+    {
+      name: WelcomeFields.taggedAs,
+      value: applied.map((tag) => `${tag.emoji?.name ?? ""} **${tag.name}**`.trim()).join(", ") || "No tags",
+    },
+  );
 
   await interaction.update({
     embeds: [embed],
@@ -223,6 +242,37 @@ async function handleResolveAs(interaction: ButtonInteraction) {
   });
 }
 
+/** The "Reactivate" button on a post the bot closed for inactivity. */
+async function handleReactivate(interaction: ButtonInteraction) {
+  const { thread } = requireForumThread(interaction);
+  if (!isStaff(interaction) && interaction.user.id !== thread.ownerId) {
+    throw new SyncError("Only the person who opened this post or staff can reactivate it.");
+  }
+
+  const components = withoutComponent(interaction.message, ComponentIds.reactivate);
+  await interaction.deferUpdate();
+
+  // Already reopened by a message, or closed again for another reason since.
+  if (posts.get(thread.id)?.closeReason !== INACTIVE_REASON) {
+    await interaction.followUp({ content: "This post isn't closed for inactivity anymore.", flags: MessageFlags.Ephemeral });
+    // Messages in a closed post can't be edited, so the button only goes away if the post is open.
+    if (!thread.archived) await interaction.editReply({ components }).catch(() => {});
+    return;
+  }
+
+  await reactivatePost(thread, interaction.user);
+  await interaction.editReply({ components });
+  await thread.send({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(Colors.success)
+        .setTitle("🔄 Reactivated")
+        .setDescription(`Reopened by ${interaction.user}. The team will take another look.`),
+    ],
+    allowedMentions: { parse: [] },
+  });
+}
+
 /** Closes the linked issue if asked, announces the outcome, then tags and closes the post. */
 async function resolvePost(
   thread: AnyThreadChannel,
@@ -248,6 +298,7 @@ async function resolvePost(
       .setDescription(lines.join("\n")),
   );
 
+  posts.markClosed(thread.id, reason);
   await updateThread(thread, {
     // Added/Rejected replace the status tag. Resolved keeps a still-open issue's Pending tag.
     status: info.status ?? (link && !closedIssue ? status : null),

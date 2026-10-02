@@ -1,6 +1,6 @@
 import type { AnyThreadChannel, Message, User } from "discord.js";
 import { config, type IssueKind } from "./config.js";
-import { links, type IssueLink } from "./db.js";
+import { links, posts, type IssueLink } from "./db.js";
 import {
   appliedTopicNames,
   issueStatus,
@@ -56,6 +56,7 @@ function attachmentLines(message: Message) {
 export async function createIssueForThread(
   thread: AnyThreadChannel,
   kind: IssueKind,
+  repo: string,
   actor: User,
   title?: string,
 ): Promise<IssueLink> {
@@ -75,7 +76,10 @@ export async function createIssueForThread(
         `opened by **${starter?.author.username ?? "unknown"}** · synced by **${actor.username}**</sub>`,
     );
 
-    const issue = await github.createIssue({
+    const votes = posts.get(thread.id)?.votes ?? 0;
+    if (kind === "feature" && votes > 0) body.push("", github.votesSection(votes));
+
+    const issue = await github.createIssue(repo, {
       title: title ?? thread.name,
       body: truncate(body.join("\n"), 60_000),
       labels: [
@@ -89,7 +93,7 @@ export async function createIssueForThread(
     const link = links.create({
       threadId: thread.id,
       guildId: thread.guildId,
-      repo: github.repoSlug,
+      repo,
       issueNumber: issue.number,
       issueUrl: issue.html_url,
       kind,
@@ -106,23 +110,24 @@ export async function createIssueForThread(
 export async function linkExistingIssue(
   thread: AnyThreadChannel,
   kind: IssueKind,
+  repo: string,
   issueNumber: number,
   actor: User,
 ): Promise<IssueLink> {
   return withThreadLock(thread.id, async () => {
     assertUnlinked(thread.id);
 
-    const other = links.byIssue(github.repoSlug, issueNumber);
+    const other = links.byIssue(repo, issueNumber);
     if (other) throw new SyncError(`Issue #${issueNumber} is already linked to <#${other.threadId}>.`);
 
-    const issue = await github.getIssue(issueNumber);
-    if (!issue) throw new SyncError(`Issue #${issueNumber} was not found in ${github.repoSlug}.`);
+    const issue = await github.getIssue(repo, issueNumber);
+    if (!issue) throw new SyncError(`Issue #${issueNumber} was not found in ${repo}.`);
     if (issue.pull_request) throw new SyncError(`#${issueNumber} is a pull request, not an issue.`);
 
     const link = links.create({
       threadId: thread.id,
       guildId: thread.guildId,
-      repo: github.repoSlug,
+      repo,
       issueNumber,
       issueUrl: issue.html_url,
       kind,
@@ -130,10 +135,15 @@ export async function linkExistingIssue(
     });
 
     await github.commentOnIssue(
+      repo,
       issueNumber,
       `🔗 Linked to Discord ${KIND_LABEL[kind]} [${thread.name}](${thread.url}) by **${actor.username}**.`,
     );
-    await github.addLabels(issueNumber, appliedTopicNames(thread)).catch(logWarning("add topic labels"));
+    await github.addLabels(repo, issueNumber, appliedTopicNames(thread)).catch(logWarning("add topic labels"));
+    if (kind === "feature") {
+      const votes = posts.get(thread.id)?.votes ?? 0;
+      if (votes > 0) await github.setIssueVotes(repo, issueNumber, votes).catch(logWarning("sync votes"));
+    }
     await updateThread(thread, { status: issueStatus(issue) }).catch(
       logWarning("update post status"),
     );
@@ -167,15 +177,16 @@ export async function resolveThread(
   let status: PostStatus | undefined;
 
   if (link) {
-    const issue = await github.getIssue(link.issueNumber);
+    const issue = await github.getIssue(link.repo, link.issueNumber);
     if (issue?.state === "open" && options.closeIssue) {
       const rejected = options.reason === "not_planned";
       await github.commentOnIssue(
+        link.repo,
         link.issueNumber,
         `${rejected ? "🚫" : "✅"} Closed as **${options.label}** on Discord by **${actor.username}**.`,
       );
-      expectGithubEvent(`closed:${link.issueNumber}`);
-      await github.closeIssue(link.issueNumber, options.reason);
+      expectGithubEvent(`closed:${link.repo}#${link.issueNumber}`);
+      await github.closeIssue(link.repo, link.issueNumber, options.reason);
       closedIssue = true;
       status = rejected ? "REJECTED" : "ADDED";
     } else if (issue) {
@@ -196,7 +207,7 @@ export async function syncTopicLabels(oldThread: AnyThreadChannel, newThread: An
 
   const before = appliedTopicNames(newThread, oldThread.appliedTags);
   const added = appliedTopicNames(newThread).filter((name) => !before.includes(name));
-  await github.addLabels(link.issueNumber, added);
+  await github.addLabels(link.repo, link.issueNumber, added);
 }
 
 /** Mirrors a Discord reply in a linked thread as a GitHub issue comment. */
@@ -218,7 +229,7 @@ export async function mirrorMessageToIssue(message: Message) {
   if (content) body.push(content.split("\n").map((line) => `> ${line}`).join("\n"));
   if (attachments.length) body.push("", ...attachments);
 
-  await github.commentOnIssue(link.issueNumber, truncate(body.join("\n"), 60_000));
+  await github.commentOnIssue(link.repo, link.issueNumber, truncate(body.join("\n"), 60_000));
 }
 
 export function logWarning(action: string) {

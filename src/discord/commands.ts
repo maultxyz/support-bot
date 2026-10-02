@@ -90,6 +90,12 @@ export const commands = [
                   { name: "Feature request", value: "feature" },
                 ),
             )
+            .addStringOption((opt) =>
+              opt
+                .setName("repo")
+                .setDescription("GitHub repo for this forum's issues, as owner/repo (default: the bot's default repo)")
+                .setMaxLength(140),
+            )
             .addBooleanOption((opt) =>
               opt
                 .setName("create_tags")
@@ -126,7 +132,61 @@ export const commands = [
             .addRoleOption((opt) => opt.setName("role").setDescription("The role").setRequired(true)),
         ),
     )
+    .addSubcommandGroup((group) =>
+      group
+        .setName("alerts")
+        .setDescription("Get alerted about posts that no staff member has replied to")
+        .addSubcommand((sub) =>
+          sub
+            .setName("on")
+            .setDescription("Post an alert when a post has no staff reply after a while")
+            .addChannelOption((opt) =>
+              opt
+                .setName("channel")
+                .setDescription("Where to post alerts")
+                .setRequired(true)
+                .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement),
+            )
+            .addNumberOption((opt) =>
+              opt
+                .setName("after_hours")
+                .setDescription("Hours without a staff reply before alerting (e.g. 0.5, 4, 24)")
+                .setRequired(true)
+                .setMinValue(0.25)
+                .setMaxValue(168),
+            )
+            .addRoleOption((opt) => opt.setName("role").setDescription("Role to ping with each alert")),
+        )
+        .addSubcommand((sub) => sub.setName("off").setDescription("Stop posting unanswered-post alerts")),
+    )
+    .addSubcommandGroup((group) =>
+      group
+        .setName("autoclose")
+        .setDescription("Close support posts whose author stops replying")
+        .addSubcommand((sub) =>
+          sub
+            .setName("on")
+            .setDescription("Close a support post when its author hasn't replied to staff for a while")
+            .addNumberOption((opt) =>
+              opt
+                .setName("after_days")
+                .setDescription("Days without a reply from the author after staff answered (e.g. 3, 7)")
+                .setRequired(true)
+                .setMinValue(0.5)
+                .setMaxValue(90),
+            ),
+        )
+        .addSubcommand((sub) => sub.setName("off").setDescription("Stop closing inactive posts")),
+    )
     .addSubcommand((sub) => sub.setName("show").setDescription("Show the current bot configuration")),
+
+  new SlashCommandBuilder()
+    .setName("stats")
+    .setDescription("Show support activity and response times for this server")
+    .setContexts(InteractionContextType.Guild)
+    .addIntegerOption((opt) =>
+      opt.setName("days").setDescription("How many days to look back (default: 30)").setMinValue(1).setMaxValue(365),
+    ),
 ].map((command) => command.toJSON());
 
 /** Registers commands globally so they work in every server the bot is invited to. */

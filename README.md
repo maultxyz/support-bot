@@ -5,9 +5,11 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 ## Features
 
 - **Configured from Discord.** Use `/setup forum add` to register any number of support or feature-request forums, and `/setup staff add` to choose which roles count as staff. Neither needs env vars.
+- **A repo per forum.** Each forum can file issues into its own GitHub repo (`/setup forum add … repo:owner/name`), so one bot can serve several projects or servers. Forums without one use `GITHUB_OWNER`/`GITHUB_REPO`.
 - **Status tags.** Posts linked to an issue are tagged `Pending` while the issue is open, `Added` when it's closed as completed, and `Rejected` when it's closed as not planned or a duplicate. The bot never changes post titles.
 - **Closing reasons.** Every closed post is tagged with why it was closed: `Resolved` (answered or solved), `Added` (fixed or implemented), or `Rejected` (won't be done). When staff press **Mark resolved**, they pick the reason from a private menu. A post's author can close it themselves, but only as `Resolved`.
 - **Forum-based support.** Every new post in a registered forum gets a welcome message with **Track on GitHub** and **Mark resolved** buttons.
+- **Possibly related issues.** The welcome message lists up to 3 existing issues in the forum's repo whose titles share keywords with the new post, with a link to the Discord post each one is tracked in.
 - **Topic tagging prompt.** If a new post has no topic tag yet, the welcome message includes a menu of the forum's tags (e.g. `3D Model`, `Web`, `Server`, `Discord`). The author or staff pick up to 4, and the bot applies them. Topic tags are simply the forum's own tags, managed in the forum's Discord settings. The bot's status tags and any moderated tags are left out.
 - **Discord → GitHub**
   - Staff turn a post into a GitHub issue. The post's title becomes the issue title, its first message and attachments become the issue body, and the issue is labelled by request type plus the post's topic tags (e.g. `enhancement`, `3D Model`, `Web`).
@@ -15,10 +17,15 @@ A Discord support bot for **forum channels** that syncs support and feature requ
   - Topic tags added to a linked post later become labels on its issue. Removing a tag in Discord doesn't remove the label, so triage done on GitHub isn't undone. GitHub creates any label that doesn't exist yet.
   - Replies in a linked post are mirrored as issue comments.
   - Closing a linked post as staff also closes its issue. `Rejected` closes it as *not planned*, and the other reasons close it as *completed*.
+- **Votes on feature requests.** Each member who reacts to a feature request's first message counts as one vote (the author and bots don't count). The total is kept in a `👍 N votes on Discord` line at the end of the linked issue's body, and the most-voted open requests appear in `/stats`.
+- **Unanswered-post alerts.** With `/setup alerts on`, the bot posts in a staff channel (optionally pinging a role) when a post has gone a set time without a reply from staff. Staff replies on Discord and comments on the linked GitHub issue both count.
+- **Closing inactive posts.** With `/setup autoclose on`, a support post closes on its own when staff replied last and the author hasn't answered for the set time. The bot posts a closing message with a **Reactivate** button (for the author or staff), tags the post `Resolved`, and closes it. The author can also reopen it just by sending a message. Feature requests and posts linked to a GitHub issue are never closed this way.
+- **Stats.** `/stats` shows new and closed posts, closing reasons, open and unanswered counts, first-response and time-to-close medians, top topics, and most-voted feature requests.
 - **GitHub → Discord** (via webhook)
   - New issue comments are posted into the thread.
   - When someone is assigned to the issue, the bot posts that they're working on it.
-  - When the issue is closed, the bot posts a notice, swaps the tag to `Added` or `Rejected`, and closes the post.
+  - When the issue is closed, the bot posts a notice, swaps the tag to `Added` or `Rejected`, and closes the post. If it was completed, the notice links the pull request or commit that closed it and pings the post's author.
+  - When a release is published, the bot finds the issues it ships (mentioned in the release notes directly, or closed by a pull request the notes mention) and tells each linked post which release it's in, pinging the author.
   - When the issue is reopened, the bot reopens the post and sets the tag back to `Pending`.
 - **No echo loops.** Comments the bot writes on GitHub carry a hidden marker, and issue closes the bot triggers itself are skipped, so nothing gets mirrored twice.
 
@@ -26,18 +33,23 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 
 | Command | Who | What it does |
 | --- | --- | --- |
-| `/setup forum add <channel> <type> [create_tags]` | Manage Server | Register a forum as support or feature requests (run it again to change the type). Checks the bot's permissions and creates missing tags |
+| `/setup forum add <channel> <type> [repo] [create_tags]` | Manage Server | Register a forum as support or feature requests, filing issues into `repo` (`owner/name`; defaults to `GITHUB_OWNER`/`GITHUB_REPO`). Run it again to change the type or repo. Checks the bot's permissions and creates missing tags |
 | `/setup forum remove <channel>` | Manage Server | Stop managing a forum |
 | `/setup staff add <role>` | Manage Server | Make a role support staff |
 | `/setup staff remove <role>` | Manage Server | Remove a role from support staff |
-| `/setup show` | Manage Server | Show the registered forums, staff roles, and GitHub repo |
+| `/setup alerts on <channel> <after_hours> [role]` | Manage Server | Alert in `channel` when a post has had no staff reply for `after_hours`, optionally pinging `role` |
+| `/setup alerts off` | Manage Server | Stop unanswered-post alerts |
+| `/setup autoclose on <after_days>` | Manage Server | Close support posts whose author hasn't replied to staff for `after_days` |
+| `/setup autoclose off` | Manage Server | Stop closing inactive posts |
+| `/setup show` | Manage Server | Show the registered forums and their repos, staff roles, alert and auto-close settings |
 | `/issue create [type] [title]` | Staff | Create a GitHub issue from this post |
 | `/issue link <number>` | Staff | Link this post to an existing issue |
 | `/issue unlink` | Staff | Remove the link (the issue is left untouched) |
 | `/issue status` | Staff | Show the linked issue's state, labels, and assignees |
+| `/stats [days]` | Staff | Support activity for the last `days` (default 30), shown only to you |
 | `/resolve [reason] [close_issue]` | Post author or staff | Close the post and tag it with the reason: **Resolved** (default), **Added**, or **Rejected**. Only staff can choose Added or Rejected. Staff also close the linked issue (default `true`) |
 
-**Staff** means members with a role added through `/setup staff add`, plus anyone with **Manage Threads** (so moderators work before any roles are set up). Staff can use `/issue` and resolve any post. Everyone can see `/issue`, but the bot rejects non-staff when they run it. `/setup` is hidden from members without Manage Server. To change that, go to *Server Settings → Integrations*.
+**Staff** means members with a role added through `/setup staff add`, plus anyone with **Manage Threads** (so moderators work before any roles are set up). Staff can use `/issue` and `/stats` and resolve any post. Everyone can see `/issue` and `/stats`, but the bot rejects non-staff when they run them. `/setup` is hidden from members without Manage Server. To change that, go to *Server Settings → Integrations*.
 
 ## Setup
 
@@ -51,12 +63,12 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 
 ### 2. GitHub
 
-1. Create a **fine-grained personal access token** limited to the target repo, with **Issues: Read and write**. Issues and comments will appear under that account, so a dedicated bot account looks cleanest.
-2. In the repo, go to *Settings → Webhooks → Add webhook*:
+1. Create a **fine-grained personal access token** limited to the repos the bot files into, with **Issues: Read and write**, **Pull requests: Read**, and **Contents: Read**. The last two let the bot say which pull request or commit fixed an issue and which release shipped it; without them, those notices are left out. Issues and comments will appear under that account, so a dedicated bot account looks cleanest.
+2. In each repo (or once for the whole organization), go to *Settings → Webhooks → Add webhook*:
    - **Payload URL:** `https://<your-domain>/webhooks/github`
    - **Content type:** `application/json`
    - **Secret:** the same value as `GITHUB_WEBHOOK_SECRET`
-   - **Events:** *Let me select individual events* → **Issues** and **Issue comments**
+   - **Events:** *Let me select individual events* → **Issues**, **Issue comments**, and **Releases**
 
 ### 3. Configure
 
@@ -98,21 +110,24 @@ Requires Node.js 22.13 or newer (it uses the built-in `node:sqlite`). To receive
 src/
   index.ts           boot: Hono server + Discord login + graceful shutdown
   config.ts          env validation (zod)
-  db.ts              SQLite store: thread ↔ issue links, forums, staff roles
+  db.ts              SQLite store: thread ↔ issue links, forums, staff roles, posts, server settings
   github.ts          Octokit helpers
   sync.ts            Discord → GitHub logic (create/link/resolve/mirror)
+  tracking.ts        post tracking, votes, unanswered alerts, inactive-post closing
   github-events.ts   GitHub → Discord webhook handling
   server.ts          Hono routes
   discord/
     client.ts        gateway client + event wiring
     commands.ts      slash command definitions/registration
     interactions.ts  slash command + button handlers
-    setup.ts         /setup: forums and staff roles
+    setup.ts         /setup: forums, staff roles, alerts, auto-close
+    stats.ts         /stats
     util.ts          tags, permissions, embeds
 ```
 
 ## Notes
 
 - Attachments are linked from the issue as Discord CDN URLs. These links can expire, so for long-lived issues, re-upload important screenshots to GitHub.
-- Slash commands are registered globally on startup, so they work in every server. Each server has its own forums and staff roles, set up with `/setup`. All servers file issues into the one repo set by `GITHUB_OWNER`/`GITHUB_REPO`.
-- When the bot is removed from a server, that server's forums, staff roles, and issue links are deleted. The GitHub issues themselves are left alone.
+- Slash commands are registered globally on startup, so they work in every server. Each server has its own forums, staff roles, and alert settings, set up with `/setup`. Each forum files into its own repo, or the one set by `GITHUB_OWNER`/`GITHUB_REPO`.
+- Alerts, auto-close, and `/stats` only know about posts created while this version of the bot was running. Alerts also skip posts more than a week old, so turning them on doesn't flood the channel.
+- When the bot is removed from a server, that server's forums, staff roles, issue links, post history, and settings are deleted. The GitHub issues themselves are left alone.

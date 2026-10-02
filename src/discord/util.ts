@@ -10,11 +10,13 @@ import {
   type BaseInteraction,
   type Channel,
   type GuildForumTag,
+  type GuildMember,
   type Message,
   type ThreadEditOptions,
 } from "discord.js";
 import { config, type IssueKind } from "../config.js";
-import { forums, staffRoles, type IssueLink } from "../db.js";
+import { forums, links, staffRoles, type IssueLink } from "../db.js";
+import { defaultRepo, type SimilarIssue } from "../github.js";
 
 export const Colors = {
   brand: 0x5865f2,
@@ -29,6 +31,13 @@ export const ComponentIds = {
   topics: "support:topics",
   /** Prefix; followed by a ResolveReason. */
   resolveAs: "support:resolve-as:",
+  reactivate: "support:reactivate",
+} as const;
+
+/** Names of the welcome message's embed fields that get swapped out later. */
+export const WelcomeFields = {
+  topicPrompt: "🏷️ What is this about?",
+  taggedAs: "🏷️ Tagged as",
 } as const;
 
 export const KIND_LABEL: Record<IssueKind, string> = {
@@ -36,11 +45,19 @@ export const KIND_LABEL: Record<IssueKind, string> = {
   feature: "feature request",
 };
 
-/** Returns the thread and its request kind if the channel is a post in a managed forum. */
+/**
+ * Returns the thread, its request kind and its forum's GitHub repo if the channel is a post in a managed forum.
+ * `repo` is null when neither the forum nor GITHUB_OWNER/GITHUB_REPO set one.
+ */
 export function asForumThread(channel: Channel | null) {
   if (!channel?.isThread() || !channel.parentId) return null;
   const forum = forums.get(channel.parentId);
-  return forum ? { thread: channel, kind: forum.kind } : null;
+  return forum ? { thread: channel, kind: forum.kind, repo: forum.repo ?? defaultRepo } : null;
+}
+
+function hasStaffRole(guildId: string, memberRoleIds: readonly string[]) {
+  const staffRoleIds = staffRoles.list(guildId);
+  return memberRoleIds.some((id) => staffRoleIds.includes(id));
 }
 
 /** Staff are members with Manage Threads, or with a role added via /setup staff add. */
@@ -48,9 +65,13 @@ export function isStaff(interaction: BaseInteraction): boolean {
   if (interaction.memberPermissions?.has(PermissionFlagsBits.ManageThreads)) return true;
   const roles = interaction.member?.roles;
   if (!roles || !interaction.guildId) return false;
-  const memberRoleIds = Array.isArray(roles) ? roles : [...roles.cache.keys()];
-  const staffRoleIds = staffRoles.list(interaction.guildId);
-  return memberRoleIds.some((id) => staffRoleIds.includes(id));
+  return hasStaffRole(interaction.guildId, Array.isArray(roles) ? roles : [...roles.cache.keys()]);
+}
+
+/** Like `isStaff`, for the author of a message in a post. */
+export function isStaffMember(member: GuildMember, thread: AnyThreadChannel): boolean {
+  if (thread.permissionsFor(member)?.has(PermissionFlagsBits.ManageThreads)) return true;
+  return hasStaffRole(member.guild.id, [...member.roles.cache.keys()]);
 }
 
 /** Status of the GitHub issue linked to a post, shown as a forum tag. */
@@ -96,6 +117,17 @@ export const RESOLVE_REASONS: Record<
 };
 
 /** Staff-only picker shown when staff press "Mark resolved". */
+/** Shown on the message that closes an inactive post. */
+export function reactivateButton() {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(ComponentIds.reactivate)
+      .setLabel("Reactivate")
+      .setEmoji("🔄")
+      .setStyle(ButtonStyle.Primary),
+  );
+}
+
 export function resolveReasonPicker() {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     Object.entries(RESOLVE_REASONS).map(([reason, info]) =>
@@ -189,11 +221,15 @@ const BOT_TAG_NAMES = [...Object.values(STATUS_TAGS), config.RESOLVED_TAG_NAME].
 /** Discord allows 5 tags per post; leave one slot for the status/resolved tag. */
 const MAX_TOPICS = 4;
 
+export function isTopicTag(tag: GuildForumTag) {
+  return !tag.moderated && !BOT_TAG_NAMES.includes(tag.name.toLowerCase());
+}
+
 /** Forum tags members can pick to say what a post is about (e.g. 3D Model, Web, Server). */
 export function topicTags(thread: AnyThreadChannel): GuildForumTag[] {
   const parent = thread.parent;
   if (!parent || !("availableTags" in parent)) return [];
-  return parent.availableTags.filter((tag) => !tag.moderated && !BOT_TAG_NAMES.includes(tag.name.toLowerCase()));
+  return parent.availableTags.filter(isTopicTag);
 }
 
 /** Names of the topic tags applied to a post, used as GitHub labels. */
@@ -241,7 +277,21 @@ export function withoutComponent(message: Message, customId: string) {
     .filter((row) => row.type !== ComponentType.ActionRow || row.components.length > 0);
 }
 
-export function welcomeMessage(kind: IssueKind, thread: AnyThreadChannel) {
+/** One line per similar issue, linking the Discord post it's tracked in when that's in the same server. */
+function similarIssueLines(thread: AnyThreadChannel, repo: string, similar: SimilarIssue[]) {
+  return similar.map((issue) => {
+    const link = links.byIssue(repo, issue.number);
+    const post = link && link.guildId === thread.guildId && link.threadId !== thread.id ? ` · <#${link.threadId}>` : "";
+    const state = issue.open ? "open" : "closed";
+    return `[#${issue.number}](${issue.url}) ${truncate(issue.title, 80)} (${state})${post}`;
+  });
+}
+
+export function welcomeMessage(
+  kind: IssueKind,
+  thread: AnyThreadChannel,
+  related?: { repo: string; similar: SimilarIssue[] },
+) {
   const topics = topicTags(thread);
   const topicIds = topics.map((tag) => tag.id);
   // Only ask for topics if the forum has some and the author didn't already pick one.
@@ -258,9 +308,15 @@ export function welcomeMessage(kind: IssueKind, thread: AnyThreadChannel) {
         : "The team will review your request. Other members can show support by reacting to the post.\n\n" +
             "If you no longer need this, press **Mark resolved** or use `/resolve`.",
     );
+  if (related?.similar.length) {
+    embed.addFields({
+      name: "🔎 Possibly related",
+      value: similarIssueLines(thread, related.repo, related.similar).join("\n"),
+    });
+  }
   if (askForTopics) {
     embed.addFields({
-      name: "🏷️ What is this about?",
+      name: WelcomeFields.topicPrompt,
       value: "Pick the tags that fit from the menu below so the right people see your post.",
     });
   }
