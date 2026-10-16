@@ -182,6 +182,7 @@ export async function updateThread(thread: AnyThreadChannel, update: ThreadUpdat
   // Discord allows at most 5 tags per post; never drop the author's own tags to make room.
   const next = [...current.filter((id) => !remove.includes(id))];
   for (const id of add) if (!next.includes(id) && next.length < 5) next.push(id);
+  syncOpenTag(thread, next);
   if (next.length !== current.length || next.some((id) => !current.includes(id))) edit.appliedTags = next;
 
   let archived = thread.archived ?? false;
@@ -193,6 +194,17 @@ export async function updateThread(thread: AnyThreadChannel, update: ThreadUpdat
   if (update.archived !== undefined && update.archived !== archived) edit.archived = update.archived;
 
   if (Object.keys(edit).length) await thread.edit({ ...edit, reason: update.reason });
+}
+
+/** Keeps a support post tagged Open until a status or Resolved tag replaces it. */
+function syncOpenTag(thread: AnyThreadChannel, tags: string[]) {
+  if (asForumThread(thread)?.kind !== "support") return;
+  const [openId] = tagIds(thread, [config.OPEN_TAG_NAME]);
+  if (!openId) return;
+  const closingIds = tagIds(thread, CLOSING_TAG_NAMES);
+  const index = tags.indexOf(openId);
+  if (index !== -1) tags.splice(index, 1);
+  if (!tags.some((id) => closingIds.includes(id)) && tags.length < 5) tags.push(openId);
 }
 
 /** Unarchives a thread so the bot can post in it and edit its tags. */
@@ -216,7 +228,8 @@ export function linkEmbed(link: IssueLink, title: string) {
 }
 
 /** Tags the bot manages itself; everything else non-moderated in a forum is a topic tag. */
-const BOT_TAG_NAMES = [...Object.values(STATUS_TAGS), config.RESOLVED_TAG_NAME].map((name) => name.toLowerCase());
+const CLOSING_TAG_NAMES = [...Object.values(STATUS_TAGS), config.RESOLVED_TAG_NAME];
+const BOT_TAG_NAMES = [...CLOSING_TAG_NAMES, config.OPEN_TAG_NAME].map((name) => name.toLowerCase());
 
 /** Discord allows 5 tags per post; leave one slot for the status/resolved tag. */
 const MAX_TOPICS = 4;

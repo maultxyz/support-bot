@@ -6,7 +6,7 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 
 - **Configured from Discord.** Use `/setup forum add` to register any number of support or feature-request forums, and `/setup staff add` to choose which roles count as staff. Neither needs env vars.
 - **A repo per forum.** Each forum can file issues into its own GitHub repo (`/setup forum add … repo:owner/name`), so one bot can serve several projects or servers. Forums without one use `GITHUB_OWNER`/`GITHUB_REPO`.
-- **Status tags.** Posts linked to an issue are tagged `Pending` while the issue is open, `Added` when it's closed as completed, and `Rejected` when it's closed as not planned or a duplicate. The bot never changes post titles.
+- **Status tags.** New support posts are tagged `Open` until they're linked to an issue or closed. Posts linked to an issue are tagged `Pending` while the issue is open, `Added` when it's closed as completed, and `Rejected` when it's closed as not planned or a duplicate. The bot never changes post titles.
 - **Closing reasons.** Every closed post is tagged with why it was closed: `Resolved` (answered or solved), `Added` (fixed or implemented), or `Rejected` (won't be done). When staff press **Mark resolved**, they pick the reason from a private menu. A post's author can close it themselves, but only as `Resolved`.
 - **Forum-based support.** Every new post in a registered forum gets a welcome message with **Track on GitHub** and **Mark resolved** buttons.
 - **Possibly related issues.** The welcome message lists up to 3 existing issues in the forum's repo whose titles share keywords with the new post, with a link to the Discord post each one is tracked in.

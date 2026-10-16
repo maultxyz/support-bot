@@ -32,6 +32,9 @@ const BOT_TAGS = [
   { name: config.RESOLVED_TAG_NAME, moderated: false },
 ];
 
+/** Applied to new support posts until they're linked to an issue or closed. */
+const OPEN_TAG = { name: config.OPEN_TAG_NAME, moderated: true };
+
 export async function handleSetupCommand(interaction: ChatInputCommandInteraction<"cached">) {
   const group = interaction.options.getSubcommandGroup();
   const subcommand = interaction.options.getSubcommand();
@@ -94,7 +97,7 @@ async function addForum(interaction: ChatInputCommandInteraction<"cached">) {
     notes.push(`⚠️ I'm missing these permissions in ${forum}: **${missing.join(", ")}**.`);
   }
 
-  const missingTags = BOT_TAGS.filter(
+  const missingTags = (kind === "support" ? [...BOT_TAGS, OPEN_TAG] : BOT_TAGS).filter(
     ({ name }) => !forum.availableTags.some((tag) => tag.name.toLowerCase() === name.toLowerCase()),
   );
   if (missingTags.length) notes.push(await addTags(forum, missingTags, createTags));

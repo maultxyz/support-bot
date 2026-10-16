@@ -17,6 +17,7 @@ const schema = z.object({
   DATABASE_PATH: z.string().default("./data/bot.db"),
 
   DISCORD_TOKEN: z.string().min(1),
+  OPEN_TAG_NAME: z.string().default("Open"),
   RESOLVED_TAG_NAME: z.string().default("Resolved"),
   PENDING_TAG_NAME: z.string().default("Pending"),
   ADDED_TAG_NAME: z.string().default("Added"),

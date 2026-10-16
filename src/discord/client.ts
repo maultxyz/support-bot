@@ -8,13 +8,14 @@ import {
   PermissionFlagsBits,
   type AnyThreadChannel,
 } from "discord.js";
+import { config } from "../config.js";
 import { forums, links, posts, removeGuildData, staffRoles } from "../db.js";
 import { findSimilarIssues } from "../github.js";
 import { logWarning, mirrorMessageToIssue, syncTopicLabels } from "../sync.js";
 import { recordReply, scheduleVoteSync, startScheduledChecks, trackPost } from "../tracking.js";
 import { registerCommands } from "./commands.js";
 import { handleInteraction } from "./interactions.js";
-import { asForumThread, welcomeMessage } from "./util.js";
+import { asForumThread, updateThread, welcomeMessage } from "./util.js";
 
 export function createDiscordClient() {
   const client = new Client({
@@ -97,6 +98,9 @@ async function onPostCreated(thread: AnyThreadChannel) {
   const context = asForumThread(thread);
   if (!context) return;
   trackPost(thread, context.kind);
+  if (context.kind === "support") {
+    updateThread(thread, { addTags: [config.OPEN_TAG_NAME] }).catch(logWarning("tag new post as open"));
+  }
 
   // Search while waiting for the starter message; a failed search just leaves the section out.
   const { repo } = context;

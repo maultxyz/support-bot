@@ -8,6 +8,7 @@ services:
       - "3000:3000"
     environment:
       DISCORD_TOKEN: ${DISCORD_TOKEN}
+      OPEN_TAG_NAME: ${OPEN_TAG_NAME:-Open}
       RESOLVED_TAG_NAME: ${RESOLVED_TAG_NAME:-Resolved}
       PENDING_TAG_NAME: ${PENDING_TAG_NAME:-Pending}
       ADDED_TAG_NAME: ${ADDED_TAG_NAME:-Added}
