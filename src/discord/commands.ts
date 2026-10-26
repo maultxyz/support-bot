@@ -3,7 +3,6 @@ import {
   InteractionContextType,
   PermissionFlagsBits,
   SlashCommandBuilder,
-  type SlashCommandStringOption,
   type Client,
 } from "discord.js";
 
@@ -197,15 +196,13 @@ export const commands = [
     .addSubcommand((sub) =>
       sub
         .setName("post")
-        .setDescription("Post an embedded announcement (opens a form for the text)")
+        .setDescription("Build an embedded announcement, with a live preview, then post it")
         .addChannelOption((opt) =>
           opt
             .setName("channel")
             .setDescription("Where to post it (default: this channel)")
             .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement),
         )
-        .addStringOption((opt) => announceColorOption(opt).setDescription("Color of the embed's side bar (default: Blurple)"))
-        .addAttachmentOption((opt) => opt.setName("image").setDescription("Large image shown under the message"))
         .addRoleOption((opt) =>
           opt.setName("ping").setDescription("Role to ping with the announcement (can be @everyone)"),
         )
@@ -218,28 +215,12 @@ export const commands = [
     .addSubcommand((sub) =>
       sub
         .setName("edit")
-        .setDescription("Edit an announcement (opens the form filled in with its current text)")
+        .setDescription("Open an announcement in the builder to change it")
         .addStringOption((opt) =>
           opt.setName("message").setDescription("Link to the announcement (or its message ID)").setRequired(true),
-        )
-        .addStringOption((opt) => announceColorOption(opt).setDescription("New color (default: keep the current one)"))
-        .addAttachmentOption((opt) => opt.setName("image").setDescription("Replace the image"))
-        .addBooleanOption((opt) => opt.setName("remove_image").setDescription("Remove the image")),
+        ),
     ),
 ].map((command) => command.toJSON());
-
-function announceColorOption(opt: SlashCommandStringOption) {
-  return opt
-    .setName("color")
-    .addChoices(
-      { name: "Blurple", value: "brand" },
-      { name: "Green", value: "green" },
-      { name: "Purple", value: "purple" },
-      { name: "Yellow", value: "yellow" },
-      { name: "Red", value: "red" },
-      { name: "Gray", value: "gray" },
-    );
-}
 
 /** Registers commands globally so they work in every server the bot is invited to. */
 export async function registerCommands(client: Client<true>) {

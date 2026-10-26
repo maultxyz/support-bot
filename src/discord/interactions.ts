@@ -13,7 +13,7 @@ import { links, posts } from "../db.js";
 import { getIssue } from "../github.js";
 import { createIssueForThread, linkExistingIssue, resolveThread, SyncError, unlinkThread } from "../sync.js";
 import { INACTIVE_REASON, reactivatePost } from "../tracking.js";
-import { handleAnnounceCommand, handleAnnounceModal } from "./announce.js";
+import { handleAnnounceCommand, handleAnnounceComponent, handleAnnounceModal } from "./announce.js";
 import { handleSetupCommand } from "./setup.js";
 import { handleStatsCommand } from "./stats.js";
 import {
@@ -51,15 +51,15 @@ export async function handleInteraction(interaction: Interaction) {
       }
     } else if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "setup" && interaction.inCachedGuild()) await handleSetupCommand(interaction);
-      else if (interaction.commandName === "announce" && interaction.inCachedGuild()) {
-        await handleAnnounceCommand(interaction);
-      }
+      else if (interaction.commandName === "announce" && interaction.inCachedGuild()) await handleAnnounceCommand(interaction);
       else if (interaction.commandName === "issue") await handleIssueCommand(interaction);
       else if (interaction.commandName === "resolve") await handleResolve(interaction);
       else if (interaction.commandName === "stats" && interaction.inCachedGuild()) {
         requireStaff(interaction, "Only staff can see support stats.");
         await handleStatsCommand(interaction);
       }
+    } else if (interaction.customId.startsWith(ComponentIds.announce)) {
+      if (interaction.inCachedGuild()) await handleAnnounceComponent(interaction);
     } else if (interaction.isStringSelectMenu()) {
       if (interaction.customId === ComponentIds.topics) await handleTopicSelect(interaction);
     } else if (interaction.customId === ComponentIds.createIssue) {
