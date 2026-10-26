@@ -44,6 +44,7 @@ const COLOR_CHOICES = [
 /** What each builder button, menu and form does; part of their custom IDs. */
 const Actions = {
   text: "text",
+  footer: "footer",
   author: "author",
   images: "images",
   addField: "add-field",
@@ -53,7 +54,6 @@ const Actions = {
   field: "field",
   color: "color",
   customColor: "custom-color",
-  timestamp: "timestamp",
   post: "post",
   cancel: "cancel",
 } as const;
@@ -225,23 +225,24 @@ function renderBuilder(draft: Draft) {
     ? new EmbedBuilder({ ...embed, timestamp: draft.timestamp ? timestampFor(draft) : undefined })
     : new EmbedBuilder()
         .setColor(Colors.muted)
-        .setDescription("*Nothing here yet. Press **Text** to write the title and message.*");
+        .setDescription("*Nothing here yet. Press **Title & message** to start writing.*");
 
+  // One button per part of the embed, in the order they appear in it from top to bottom.
   const edit = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(customId(draft, Actions.text)).setLabel("Text").setEmoji("✏️").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(customId(draft, Actions.author)).setLabel("Author").setEmoji("👤").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(customId(draft, Actions.images)).setLabel("Images").setEmoji("🖼️").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(customId(draft, Actions.text))
+      .setLabel("Title & message")
+      .setEmoji("✏️")
+      .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId(customId(draft, Actions.addField))
       .setLabel("Add field")
       .setEmoji("➕")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled((embed.fields?.length ?? 0) >= MAX_FIELDS),
-    new ButtonBuilder()
-      .setCustomId(customId(draft, Actions.timestamp))
-      .setLabel(draft.timestamp ? "Timestamp: on" : "Timestamp: off")
-      .setEmoji("🕒")
-      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(customId(draft, Actions.images)).setLabel("Images").setEmoji("🖼️").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(customId(draft, Actions.footer)).setLabel("Footer").setEmoji("🔻").setStyle(ButtonStyle.Secondary),
   );
 
   const color = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
@@ -287,7 +288,9 @@ function renderBuilder(draft: Draft) {
   );
 
   return {
-    content: `${header}\n-# Only you can see this. Changes show up in the preview below.`,
+    content:
+      `${header}\n-# Only you can see this. The buttons edit the embed's parts from top to bottom: ` +
+      "author, title & message, fields, images, footer.",
     embeds: [preview],
     components: [edit, color, ...fields, finish],
     allowedMentions: { parse: [] },
@@ -324,6 +327,8 @@ export async function handleAnnounceComponent(
   switch (action) {
     case Actions.text:
       return interaction.showModal(textModal(draft));
+    case Actions.footer:
+      return interaction.showModal(footerModal(draft));
     case Actions.author:
       return interaction.showModal(authorModal(draft));
     case Actions.images:
@@ -343,9 +348,6 @@ export async function handleAnnounceComponent(
       embed.color = Number(value);
       return interaction.update(renderBuilder(draft));
     }
-    case Actions.timestamp:
-      draft.timestamp = !draft.timestamp;
-      return interaction.update(renderBuilder(draft));
     case Actions.post:
       if (interaction.isButton()) return postDraft(interaction, draft);
       return;
@@ -371,17 +373,34 @@ function textModal(draft: Draft) {
   const { embed } = draft;
   return new ModalBuilder()
     .setCustomId(customId(draft, Actions.text))
-    .setTitle("Text")
+    .setTitle("Title & message")
     .addLabelComponents(
-      label("Title").setTextInputComponent(textInput("title", TextInputStyle.Short, 256, embed.title)),
-      label("Message", "Supports Discord markdown: **bold**, lists, [links](https://example.com), etc.").setTextInputComponent(
-        textInput("description", TextInputStyle.Paragraph, 4000, embed.description),
+      label("Title", "Bold heading at the top of the announcement.").setTextInputComponent(
+        textInput("title", TextInputStyle.Short, 256, embed.title),
       ),
       label("Title link", "Optional. Makes the title a link.").setTextInputComponent(
         textInput("url", TextInputStyle.Short, 512, embed.url).setPlaceholder("https://"),
       ),
-      label("Footer", "Optional small text at the bottom.").setTextInputComponent(
-        textInput("footer", TextInputStyle.Short, 2048, embed.footer?.text),
+      label("Message", "The main text under the title. Supports markdown: **bold**, lists, [links](https://…).").setTextInputComponent(
+        textInput("description", TextInputStyle.Paragraph, 4000, embed.description),
+      ),
+    );
+}
+
+function footerModal(draft: Draft) {
+  const { footer } = draft.embed;
+  return new ModalBuilder()
+    .setCustomId(customId(draft, Actions.footer))
+    .setTitle("Footer")
+    .addLabelComponents(
+      label("Footer text", "Small text on the last line. Clear it to remove it.").setTextInputComponent(
+        textInput("text", TextInputStyle.Short, 2048, footer?.text),
+      ),
+      label("Footer icon link", "Optional. Link to a small round image before the footer text.").setTextInputComponent(
+        textInput("icon", TextInputStyle.Short, 2000, footer?.icon_url).setPlaceholder("https://"),
+      ),
+      label("Show posting time", "Shown on the footer line, in each reader's own time zone.").setCheckboxComponent(
+        new CheckboxBuilder().setCustomId("timestamp").setDefault(draft.timestamp),
       ),
     );
 }
@@ -468,6 +487,7 @@ export async function handleAnnounceModal(interaction: ModalSubmitInteraction<"c
   // Work on a copy so a rejected change leaves the draft as it was.
   const embed = structuredClone(draft.embed);
   const newUploads: Attachment[] = [];
+  let timestamp = draft.timestamp;
 
   switch (action) {
     case Actions.text: {
@@ -475,8 +495,14 @@ export async function handleAnnounceModal(interaction: ModalSubmitInteraction<"c
       embed.description = value("description") || undefined;
       embed.url = optionalUrl(value("url"), "Title link");
       if (embed.url && !embed.title) throw new SyncError("A title link needs a title.");
-      const footer = value("footer");
-      embed.footer = footer ? { ...embed.footer, text: footer } : undefined;
+      break;
+    }
+    case Actions.footer: {
+      const text = value("text");
+      const icon = optionalUrl(value("icon"), "Footer icon link");
+      if (icon && !text) throw new SyncError("A footer icon needs footer text.");
+      embed.footer = text ? { text, icon_url: icon } : undefined;
+      timestamp = interaction.fields.getCheckbox("timestamp");
       break;
     }
     case Actions.author: {
@@ -527,6 +553,7 @@ export async function handleAnnounceModal(interaction: ModalSubmitInteraction<"c
     throw new SyncError(`That would make the announcement longer than Discord's limit of ${MAX_EMBED_LENGTH} characters.`);
   }
   draft.embed = embed;
+  draft.timestamp = timestamp;
   for (const file of newUploads) draft.uploads.set(urlKey(file.url), file);
 
   if (interaction.isFromMessage()) await interaction.update(renderBuilder(draft));
