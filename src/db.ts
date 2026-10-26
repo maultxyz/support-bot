@@ -53,6 +53,13 @@ db.exec(`
     alert_after_mins INTEGER,
     autoclose_after_mins INTEGER
   );
+  CREATE TABLE IF NOT EXISTS announcements (
+    message_id TEXT PRIMARY KEY,
+    guild_id   TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
 `);
 
 // Columns added after the first release.
@@ -118,7 +125,7 @@ export const links = {
   },
 };
 
-const removeGuildStatements = ["issue_links", "forums", "staff_roles", "posts", "guild_settings"].map((table) =>
+const removeGuildStatements = ["issue_links", "forums", "staff_roles", "posts", "guild_settings", "announcements"].map((table) =>
   db.prepare(`DELETE FROM ${table} WHERE guild_id = ?`),
 );
 
@@ -344,5 +351,42 @@ export const guildSettings = {
   /** Pass `null` to stop closing inactive posts. */
   setAutoClose(guildId: string, afterMins: number | null) {
     settingsStatements.setAutoClose.run(guildId, afterMins);
+  },
+};
+
+export interface Announcement {
+  messageId: string;
+  guildId: string;
+  channelId: string;
+  createdBy: string;
+  createdAt: number;
+}
+
+const announcementStatements = {
+  get: db.prepare(`
+    SELECT message_id AS messageId, guild_id AS guildId, channel_id AS channelId,
+           created_by AS createdBy, created_at AS createdAt
+    FROM announcements WHERE message_id = ?`),
+  insert: db.prepare(`
+    INSERT INTO announcements (message_id, guild_id, channel_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)`),
+  remove: db.prepare(`DELETE FROM announcements WHERE message_id = ?`),
+};
+
+/** Messages posted with /announce, so /announce edit only touches those. */
+export const announcements = {
+  get(messageId: string) {
+    return announcementStatements.get.get(messageId) as Announcement | undefined;
+  },
+  add(announcement: Omit<Announcement, "createdAt">) {
+    announcementStatements.insert.run(
+      announcement.messageId,
+      announcement.guildId,
+      announcement.channelId,
+      announcement.createdBy,
+      Date.now(),
+    );
+  },
+  remove(messageId: string) {
+    announcementStatements.remove.run(messageId);
   },
 };

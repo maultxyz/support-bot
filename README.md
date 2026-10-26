@@ -21,6 +21,7 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 - **Unanswered-post alerts.** With `/setup alerts on`, the bot posts in a staff channel (optionally pinging a role) when a post has gone a set time without a reply from staff. Staff replies on Discord and comments on the linked GitHub issue both count.
 - **Closing inactive posts.** With `/setup autoclose on`, a support post closes on its own when staff replied last and the author hasn't answered for the set time. The bot posts a closing message with a **Reactivate** button (for the author or staff), tags the post `Resolved`, and closes it. The author can also reopen it just by sending a message. Feature requests and posts linked to a GitHub issue are never closed this way.
 - **Stats.** `/stats` shows new and closed posts, closing reasons, open and unanswered counts, first-response and time-to-close medians, top topics, and most-voted feature requests.
+- **Announcements.** `/announce post` lets staff post a rich embed to any text or announcement channel. Choose the channel, color, an image, and a role to ping as options, then fill in the title, message (with markdown), an optional title link, and an optional footer in a pop-up form. In announcement channels, `publish:true` also sends it to servers that follow the channel. `/announce edit` reopens the form filled in with an announcement's current text, and can also change its color or replace or remove its image.
 - **GitHub → Discord** (via webhook)
   - New issue comments are posted into the thread.
   - When someone is assigned to the issue, the bot posts that they're working on it.
@@ -47,9 +48,11 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 | `/issue unlink` | Staff | Remove the link (the issue is left untouched) |
 | `/issue status` | Staff | Show the linked issue's state, labels, and assignees |
 | `/stats [days]` | Staff | Support activity for the last `days` (default 30), shown only to you |
+| `/announce post [channel] [color] [image] [ping] [publish]` | Staff | Open a form to write an embedded announcement, then post it to `channel` (default: the current one). Pinging @everyone or a role that isn't mentionable needs **Mention Everyone** in that channel |
+| `/announce edit <message> [color] [image] [remove_image]` | Staff | Edit an announcement posted with `/announce post`, given its message link. Editing doesn't ping anyone again |
 | `/resolve [reason] [close_issue]` | Post author or staff | Close the post and tag it with the reason: **Resolved** (default), **Added**, or **Rejected**. Only staff can choose Added or Rejected. Staff also close the linked issue (default `true`) |
 
-**Staff** means members with a role added through `/setup staff add`, plus anyone with **Manage Threads** (so moderators work before any roles are set up). Staff can use `/issue` and `/stats` and resolve any post. Everyone can see `/issue` and `/stats`, but the bot rejects non-staff when they run them. `/setup` is hidden from members without Manage Server. To change that, go to *Server Settings → Integrations*.
+**Staff** means members with a role added through `/setup staff add`, plus anyone with **Manage Threads** (so moderators work before any roles are set up). Staff can use `/issue`, `/stats`, and `/announce` and resolve any post. Everyone can see `/issue`, `/stats`, and `/announce`, but the bot rejects non-staff when they run them. `/setup` is hidden from members without Manage Server. To change that, go to *Server Settings → Integrations*.
 
 ## Setup
 
@@ -57,7 +60,7 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 
 1. Create an application at <https://discord.com/developers/applications> and add a **Bot**.
 2. Under **Bot → Privileged Gateway Intents**, enable **Message Content Intent**. Without it, Discord refuses the connection and the bot exits with `Used disallowed intents`. Once the bot is in 100 or more servers, Discord requires verification before it grants this intent.
-3. Invite the bot to a server. On startup the bot prints a ready-made **invite link** in its logs. To build one by hand, use the `bot` and `applications.commands` scopes and these permissions: View Channels, Send Messages, Send Messages in Threads, Embed Links, Read Message History, **Manage Threads** (needed to archive posts and edit their tags). **Manage Channels** is optional: it lets `/setup forum add` create the `Pending`, `Added`, `Rejected`, and `Resolved` tags for you. The status tags are created as moderated, so only staff can apply them by hand.
+3. Invite the bot to a server. On startup the bot prints a ready-made **invite link** in its logs. To build one by hand, use the `bot` and `applications.commands` scopes and these permissions: View Channels, Send Messages, Send Messages in Threads, Embed Links, Attach Files (for `/announce` images), Read Message History, **Manage Threads** (needed to archive posts and edit their tags). **Manage Channels** is optional: it lets `/setup forum add` create the `Pending`, `Added`, `Rejected`, and `Resolved` tags for you. The status tags are created as moderated, so only staff can apply them by hand.
 4. To let other people invite the bot, leave **Public Bot** on under *Bot*. To keep it to servers you invite it to, turn it off.
 5. Once the bot is running, run `/setup forum add` for each forum. The reply tells you if the bot lacks permissions in that forum. Then run `/setup staff add` for each support role.
 
@@ -122,6 +125,7 @@ src/
     interactions.ts  slash command + button handlers
     setup.ts         /setup: forums, staff roles, alerts, auto-close
     stats.ts         /stats
+    announce.ts      /announce
     util.ts          tags, permissions, embeds
 ```
 

@@ -13,6 +13,7 @@ import { links, posts } from "../db.js";
 import { getIssue } from "../github.js";
 import { createIssueForThread, linkExistingIssue, resolveThread, SyncError, unlinkThread } from "../sync.js";
 import { INACTIVE_REASON, reactivatePost } from "../tracking.js";
+import { handleAnnounceCommand, handleAnnounceModal } from "./announce.js";
 import { handleSetupCommand } from "./setup.js";
 import { handleStatsCommand } from "./stats.js";
 import {
@@ -34,11 +35,25 @@ import {
 type ThreadInteraction = ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
 
 export async function handleInteraction(interaction: Interaction) {
-  if (!interaction.isChatInputCommand() && !interaction.isButton() && !interaction.isStringSelectMenu()) return;
+  if (
+    !interaction.isChatInputCommand() &&
+    !interaction.isButton() &&
+    !interaction.isStringSelectMenu() &&
+    !interaction.isModalSubmit()
+  ) {
+    return;
+  }
 
   try {
-    if (interaction.isChatInputCommand()) {
+    if (interaction.isModalSubmit()) {
+      if (interaction.customId.startsWith(ComponentIds.announce) && interaction.inCachedGuild()) {
+        await handleAnnounceModal(interaction);
+      }
+    } else if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "setup" && interaction.inCachedGuild()) await handleSetupCommand(interaction);
+      else if (interaction.commandName === "announce" && interaction.inCachedGuild()) {
+        await handleAnnounceCommand(interaction);
+      }
       else if (interaction.commandName === "issue") await handleIssueCommand(interaction);
       else if (interaction.commandName === "resolve") await handleResolve(interaction);
       else if (interaction.commandName === "stats" && interaction.inCachedGuild()) {

@@ -23,6 +23,8 @@ export const Colors = {
   success: 0x2ea043,
   merged: 0x8250df,
   muted: 0x6e7781,
+  warning: 0xd29922,
+  danger: 0xcf222e,
 } as const;
 
 export const ComponentIds = {
@@ -32,6 +34,8 @@ export const ComponentIds = {
   /** Prefix; followed by a ResolveReason. */
   resolveAs: "support:resolve-as:",
   reactivate: "support:reactivate",
+  /** Prefix; followed by the ID of the /announce interaction that opened the modal. */
+  announce: "support:announce:",
 } as const;
 
 /** Names of the welcome message's embed fields that get swapped out later. */

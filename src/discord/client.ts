@@ -9,7 +9,7 @@ import {
   type AnyThreadChannel,
 } from "discord.js";
 import { config } from "../config.js";
-import { forums, links, posts, removeGuildData, staffRoles } from "../db.js";
+import { announcements, forums, links, posts, removeGuildData, staffRoles } from "../db.js";
 import { findSimilarIssues } from "../github.js";
 import { logWarning, mirrorMessageToIssue, syncTopicLabels } from "../sync.js";
 import { recordReply, scheduleVoteSync, startScheduledChecks, trackPost } from "../tracking.js";
@@ -60,6 +60,7 @@ export function createDiscordClient() {
     posts.remove(thread.id);
   });
   client.on(Events.ChannelDelete, (channel) => forums.remove(channel.id));
+  client.on(Events.MessageDelete, (message) => announcements.remove(message.id));
   client.on(Events.GuildRoleDelete, (role) => staffRoles.remove(role.id));
 
   client.on(Events.MessageCreate, (message) => {
@@ -87,6 +88,7 @@ function inviteUrl(client: Client<true>) {
       PermissionFlagsBits.SendMessages,
       PermissionFlagsBits.SendMessagesInThreads,
       PermissionFlagsBits.EmbedLinks,
+      PermissionFlagsBits.AttachFiles,
       PermissionFlagsBits.ReadMessageHistory,
       PermissionFlagsBits.ManageThreads,
       PermissionFlagsBits.ManageChannels,
