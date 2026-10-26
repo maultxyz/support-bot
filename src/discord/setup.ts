@@ -1,17 +1,23 @@
 import {
   ChannelType,
   EmbedBuilder,
+  LabelBuilder,
   MessageFlags,
+  ModalBuilder,
   PermissionFlagsBits,
+  TextInputBuilder,
+  TextInputStyle,
   type ChatInputCommandInteraction,
   type ForumChannel,
+  type ModalSubmitInteraction,
 } from "discord.js";
 import { config, type IssueKind } from "../config.js";
 import { forums, guildSettings, staffRoles } from "../db.js";
 import { defaultRepo, getRepository } from "../github.js";
 import { SyncError } from "../sync.js";
 import { formatDuration } from "../tracking.js";
-import { Colors, KIND_LABEL } from "./util.js";
+import { DEFAULT_DETAIL_QUESTIONS, detailQuestions, MAX_DETAIL_QUESTIONS, MAX_QUESTION_LENGTH } from "./details.js";
+import { Colors, ComponentIds, KIND_LABEL } from "./util.js";
 
 /** Permissions the bot needs inside a managed forum. */
 const REQUIRED_PERMISSIONS = {
@@ -41,6 +47,7 @@ export async function handleSetupCommand(interaction: ChatInputCommandInteractio
 
   if (group === "forum" && subcommand === "add") return addForum(interaction);
   if (group === "forum" && subcommand === "remove") return removeForum(interaction);
+  if (group === "forum" && subcommand === "details") return editDetailQuestions(interaction);
   if (group === "staff" && subcommand === "add") return addStaffRole(interaction);
   if (group === "staff" && subcommand === "remove") return removeStaffRole(interaction);
   if (group === "alerts" && subcommand === "on") return enableAlerts(interaction);
@@ -143,6 +150,67 @@ async function removeForum(interaction: ChatInputCommandInteraction<"cached">) {
   });
 }
 
+async function editDetailQuestions(interaction: ChatInputCommandInteraction<"cached">) {
+  const option = interaction.options.getChannel("channel", true, [ChannelType.GuildForum]);
+  const forum = forums.get(option.id);
+  if (!forum) throw new SyncError(`<#${option.id}> isn't a registered forum. Add it with \`/setup forum add\` first.`);
+
+  if (interaction.options.getBoolean("reset")) {
+    forums.setDetailQuestions(forum.channelId, null);
+    await interaction.reply({
+      content: `${option} is back to the default questions.\n${questionList(DEFAULT_DETAIL_QUESTIONS[forum.kind])}`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const current = detailQuestions(forum.channelId);
+  await interaction.showModal(
+    new ModalBuilder()
+      .setCustomId(`${ComponentIds.setupDetails}${forum.channelId}`)
+      .setTitle(`Questions for #${option.name}`.slice(0, 45))
+      .addLabelComponents(
+        Array.from({ length: MAX_DETAIL_QUESTIONS }, (_, index) => {
+          const input = new TextInputBuilder()
+            .setCustomId(`question-${index}`)
+            .setStyle(TextInputStyle.Short)
+            .setMaxLength(MAX_QUESTION_LENGTH)
+            .setRequired(false);
+          if (current[index]) input.setValue(current[index]);
+          const label = new LabelBuilder().setLabel(`Question ${index + 1}`).setTextInputComponent(input);
+          return index === 0 ? label.setDescription("Leave every question empty to stop asking for details.") : label;
+        }),
+      ),
+  );
+}
+
+/** The submitted `/setup forum details` form. */
+export async function handleDetailQuestionsModal(interaction: ModalSubmitInteraction<"cached">) {
+  // Modal submissions skip the command's default permissions, so check again.
+  if (!interaction.memberPermissions.has(PermissionFlagsBits.ManageGuild)) {
+    throw new SyncError("You need Manage Server to change this.");
+  }
+  const forumId = interaction.customId.slice(ComponentIds.setupDetails.length);
+  if (!forums.get(forumId)) throw new SyncError("That forum isn't registered anymore.");
+
+  const questions = Array.from({ length: MAX_DETAIL_QUESTIONS }, (_, index) =>
+    interaction.fields.getTextInputValue(`question-${index}`).trim(),
+  ).filter(Boolean);
+  forums.setDetailQuestions(forumId, questions);
+
+  await interaction.reply({
+    content: questions.length
+      ? `Short new posts in <#${forumId}> will be asked:\n${questionList(questions)}`
+      : `Posts in <#${forumId}> will no longer be asked for details.`,
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
+function questionList(questions: string[]) {
+  if (!questions.length) return "-# No questions, so posts aren't asked for details.";
+  return questions.map((question) => `- ${question}`).join("\n");
+}
+
 async function addStaffRole(interaction: ChatInputCommandInteraction<"cached">) {
   const role = interaction.options.getRole("role", true);
   if (role.id === interaction.guildId) throw new SyncError("@everyone can't be a staff role.");
@@ -172,7 +240,11 @@ async function removeStaffRole(interaction: ChatInputCommandInteraction<"cached"
 async function showConfig(interaction: ChatInputCommandInteraction<"cached">) {
   const forumLines = forums
     .list(interaction.guildId)
-    .map((forum) => `<#${forum.channelId}> → ${KIND_LABEL[forum.kind]}s in ${forum.repo ?? defaultRepo ?? "⚠️ no repo"}`);
+    .map((forum) => {
+      const questions = detailQuestions(forum.channelId).length;
+      const details = questions ? `asks short posts ${questions} question${questions === 1 ? "" : "s"}` : "doesn't ask for details";
+      return `<#${forum.channelId}> → ${KIND_LABEL[forum.kind]}s in ${forum.repo ?? defaultRepo ?? "⚠️ no repo"}, ${details}`;
+    });
   const roleLines = staffRoles.list(interaction.guildId).map((id) => `<@&${id}>`);
   const settings = guildSettings.get(interaction.guildId);
   const alerts =

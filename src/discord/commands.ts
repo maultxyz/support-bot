@@ -113,6 +113,21 @@ export const commands = [
                 .setRequired(true)
                 .addChannelTypes(ChannelType.GuildForum),
             ),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName("details")
+            .setDescription("Choose the questions short new posts are asked (opens a form)")
+            .addChannelOption((opt) =>
+              opt
+                .setName("channel")
+                .setDescription("The forum channel")
+                .setRequired(true)
+                .addChannelTypes(ChannelType.GuildForum),
+            )
+            .addBooleanOption((opt) =>
+              opt.setName("reset").setDescription("Go back to the default questions instead of opening the form"),
+            ),
         ),
     )
     .addSubcommandGroup((group) =>

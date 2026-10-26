@@ -53,6 +53,12 @@ db.exec(`
     alert_after_mins INTEGER,
     autoclose_after_mins INTEGER
   );
+  CREATE TABLE IF NOT EXISTS post_details (
+    thread_id  TEXT PRIMARY KEY,
+    guild_id   TEXT NOT NULL,
+    answers    TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS announcements (
     message_id TEXT PRIMARY KEY,
     guild_id   TEXT NOT NULL,
@@ -68,6 +74,8 @@ function addColumn(table: string, column: string, definition: string) {
   if (!columns.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 addColumn("forums", "repo", "TEXT");
+// JSON array of questions; NULL means the defaults for the forum's kind.
+addColumn("forums", "detail_questions", "TEXT");
 
 export interface IssueLink {
   threadId: string;
@@ -125,7 +133,7 @@ export const links = {
   },
 };
 
-const removeGuildStatements = ["issue_links", "forums", "staff_roles", "posts", "guild_settings", "announcements"].map((table) =>
+const removeGuildStatements = ["issue_links", "forums", "staff_roles", "posts", "guild_settings", "announcements", "post_details"].map((table) =>
   db.prepare(`DELETE FROM ${table} WHERE guild_id = ?`),
 );
 
@@ -140,9 +148,17 @@ export interface ForumConfig {
   kind: IssueKind;
   /** `owner/repo` for this forum's issues; null means GITHUB_OWNER/GITHUB_REPO. */
   repo: string | null;
+  /** Questions asked by the welcome message's "Add details" button; null means the defaults. */
+  detailQuestions: string[] | null;
 }
 
-const FORUM_SELECT = `SELECT channel_id AS channelId, guild_id AS guildId, kind, repo FROM forums`;
+const FORUM_SELECT = `
+  SELECT channel_id AS channelId, guild_id AS guildId, kind, repo, detail_questions AS detailQuestions FROM forums`;
+
+function toForum(row: unknown): ForumConfig {
+  const forum = row as Omit<ForumConfig, "detailQuestions"> & { detailQuestions: string | null };
+  return { ...forum, detailQuestions: forum.detailQuestions === null ? null : JSON.parse(forum.detailQuestions) };
+}
 
 const forumStatements = {
   get: db.prepare(`${FORUM_SELECT} WHERE channel_id = ?`),
@@ -152,22 +168,28 @@ const forumStatements = {
     INSERT INTO forums (channel_id, guild_id, kind, repo) VALUES (?, ?, ?, ?)
     ON CONFLICT (channel_id) DO UPDATE SET kind = excluded.kind, repo = COALESCE(excluded.repo, forums.repo)`),
   remove: db.prepare(`DELETE FROM forums WHERE channel_id = ?`),
+  setDetailQuestions: db.prepare(`UPDATE forums SET detail_questions = ? WHERE channel_id = ?`),
 };
 
 /** Forum channels registered with /setup forum, and the kind of request each one holds. */
 export const forums = {
   get(channelId: string) {
-    return forumStatements.get.get(channelId) as ForumConfig | undefined;
+    const row = forumStatements.get.get(channelId);
+    return row ? toForum(row) : undefined;
   },
   list(guildId: string) {
-    return forumStatements.list.all(guildId) as unknown as ForumConfig[];
+    return forumStatements.list.all(guildId).map(toForum);
   },
-  set(forum: ForumConfig) {
+  set(forum: Omit<ForumConfig, "detailQuestions">) {
     forumStatements.upsert.run(forum.channelId, forum.guildId, forum.kind, forum.repo);
   },
   /** Returns true if the channel was registered. */
   remove(channelId: string) {
     return forumStatements.remove.run(channelId).changes > 0;
+  },
+  /** Pass `null` to go back to the defaults for the forum's kind. */
+  setDetailQuestions(channelId: string, questions: string[] | null) {
+    forumStatements.setDetailQuestions.run(questions === null ? null : JSON.stringify(questions), channelId);
   },
 };
 
@@ -388,5 +410,32 @@ export const announcements = {
   },
   remove(messageId: string) {
     announcementStatements.remove.run(messageId);
+  },
+};
+
+export interface PostDetail {
+  question: string;
+  answer: string;
+}
+
+const detailStatements = {
+  get: db.prepare(`SELECT answers FROM post_details WHERE thread_id = ?`),
+  upsert: db.prepare(`
+    INSERT INTO post_details (thread_id, guild_id, answers, updated_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT (thread_id) DO UPDATE SET answers = excluded.answers, updated_at = excluded.updated_at`),
+  remove: db.prepare(`DELETE FROM post_details WHERE thread_id = ?`),
+};
+
+/** Answers given with a post's "Add details" button, included when the post becomes a GitHub issue. */
+export const postDetails = {
+  get(threadId: string) {
+    const row = detailStatements.get.get(threadId) as { answers: string } | undefined;
+    return row ? (JSON.parse(row.answers) as PostDetail[]) : [];
+  },
+  set(threadId: string, guildId: string, answers: PostDetail[]) {
+    detailStatements.upsert.run(threadId, guildId, JSON.stringify(answers), Date.now());
+  },
+  remove(threadId: string) {
+    detailStatements.remove.run(threadId);
   },
 };

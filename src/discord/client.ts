@@ -9,12 +9,13 @@ import {
   type AnyThreadChannel,
 } from "discord.js";
 import { config } from "../config.js";
-import { announcements, forums, links, posts, removeGuildData, staffRoles } from "../db.js";
+import { announcements, forums, links, postDetails, posts, removeGuildData, staffRoles } from "../db.js";
 import { findSimilarIssues } from "../github.js";
 import { logWarning, mirrorMessageToIssue, syncTopicLabels } from "../sync.js";
 import { recordReply, scheduleVoteSync, startScheduledChecks, trackPost } from "../tracking.js";
 import { registerCommands } from "./commands.js";
 import { handleInteraction } from "./interactions.js";
+import { detailQuestions, isThinPost } from "./details.js";
 import { asForumThread, updateThread, welcomeMessage } from "./util.js";
 
 export function createDiscordClient() {
@@ -58,6 +59,7 @@ export function createDiscordClient() {
   client.on(Events.ThreadDelete, (thread) => {
     links.removeByThread(thread.id);
     posts.remove(thread.id);
+    postDetails.remove(thread.id);
   });
   client.on(Events.ChannelDelete, (channel) => forums.remove(channel.id));
   client.on(Events.MessageDelete, (message) => announcements.remove(message.id));
@@ -117,7 +119,11 @@ async function onPostCreated(thread: AnyThreadChannel) {
   for (let attempt = 0; attempt < 3; attempt++) {
     await sleep(1_500);
     try {
-      await thread.send(welcomeMessage(context.kind, thread, repo ? { repo, similar: await similar } : undefined));
+      const starter = await thread.fetchStarterMessage().catch(() => null);
+      const questions = isThinPost(starter) ? detailQuestions(thread.parentId!) : [];
+      await thread.send(
+        welcomeMessage(context.kind, thread, repo ? { repo, similar: await similar } : undefined, questions),
+      );
       return;
     } catch (error) {
       if (attempt === 2) throw error;

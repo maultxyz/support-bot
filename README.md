@@ -10,6 +10,7 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 - **Closing reasons.** Every closed post is tagged with why it was closed: `Resolved` (answered or solved), `Added` (fixed or implemented), or `Rejected` (won't be done). When staff press **Mark resolved**, they pick the reason from a private menu. A post's author can close it themselves, but only as `Resolved`.
 - **Forum-based support.** Every new post in a registered forum gets a welcome message with **Track on GitHub** and **Mark resolved** buttons.
 - **Possibly related issues.** The welcome message lists up to 3 existing issues in the forum's repo whose titles share keywords with the new post, with a link to the Discord post each one is tracked in.
+- **Asking for missing details.** If a new post's text is under 200 characters, the welcome message lists a few questions and adds an **Add details** button. The author (or staff) answers them in a form, and the bot posts the answers in the post. They're included in the GitHub issue when one is created, or added as a comment if the post is already linked. Support forums ask for the version, platform, steps to reproduce, and what happened compared to what was expected. Feature forums ask nothing by default. Change a forum's questions (up to 5) with `/setup forum details`.
 - **Topic tagging prompt.** If a new post has no topic tag yet, the welcome message includes a menu of the forum's tags (e.g. `3D Model`, `Web`, `Server`, `Discord`). The author or staff pick up to 4, and the bot applies them. Topic tags are simply the forum's own tags, managed in the forum's Discord settings. The bot's status tags and any moderated tags are left out.
 - **Discord → GitHub**
   - Staff turn a post into a GitHub issue. The post's title becomes the issue title, its first message and attachments become the issue body, and the issue is labelled by request type plus the post's topic tags (e.g. `enhancement`, `3D Model`, `Web`).
@@ -36,6 +37,7 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 | --- | --- | --- |
 | `/setup forum add <channel> <type> [repo] [create_tags]` | Manage Server | Register a forum as support or feature requests, filing issues into `repo` (`owner/name`; defaults to `GITHUB_OWNER`/`GITHUB_REPO`). Run it again to change the type or repo. Checks the bot's permissions and creates missing tags |
 | `/setup forum remove <channel>` | Manage Server | Stop managing a forum |
+| `/setup forum details <channel> [reset]` | Manage Server | Open a form to set the questions short new posts are asked (up to 5; leave all empty to stop asking). `reset:true` goes back to the defaults |
 | `/setup staff add <role>` | Manage Server | Make a role support staff |
 | `/setup staff remove <role>` | Manage Server | Remove a role from support staff |
 | `/setup alerts on <channel> <after_hours> [role]` | Manage Server | Alert in `channel` when a post has had no staff reply for `after_hours`, optionally pinging `role` |
@@ -124,6 +126,7 @@ src/
     commands.ts      slash command definitions/registration
     interactions.ts  slash command + button handlers
     setup.ts         /setup: forums, staff roles, alerts, auto-close
+    details.ts       "Add details" questions on short posts
     stats.ts         /stats
     announce.ts      /announce
     util.ts          tags, permissions, embeds

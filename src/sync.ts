@@ -1,6 +1,6 @@
 import type { AnyThreadChannel, Message, User } from "discord.js";
 import { config, type IssueKind } from "./config.js";
-import { links, posts, type IssueLink } from "./db.js";
+import { links, postDetails, posts, type IssueLink, type PostDetail } from "./db.js";
 import {
   appliedTopicNames,
   issueStatus,
@@ -65,6 +65,9 @@ export async function createIssueForThread(
 
     const starter = await thread.fetchStarterMessage().catch(() => null);
     const body = [starter?.cleanContent.trim() || "_No description provided._"];
+
+    const details = postDetails.get(thread.id);
+    if (details.length) body.push("", "### Details", "", detailsMarkdown(details));
 
     if (starter?.attachments.size) {
       body.push("", "**Attachments**", ...attachmentLines(starter));
@@ -230,6 +233,11 @@ export async function mirrorMessageToIssue(message: Message) {
   if (attachments.length) body.push("", ...attachments);
 
   await github.commentOnIssue(link.repo, link.issueNumber, truncate(body.join("\n"), 60_000));
+}
+
+/** The answers as Markdown for a GitHub issue body or comment. */
+export function detailsMarkdown(answers: PostDetail[]) {
+  return answers.map(({ question, answer }) => `**${question}**\n${answer}`).join("\n\n");
 }
 
 export function logWarning(action: string) {

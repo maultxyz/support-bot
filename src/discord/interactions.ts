@@ -14,7 +14,8 @@ import { getIssue } from "../github.js";
 import { createIssueForThread, linkExistingIssue, resolveThread, SyncError, unlinkThread } from "../sync.js";
 import { INACTIVE_REASON, reactivatePost } from "../tracking.js";
 import { handleAnnounceCommand, handleAnnounceComponent, handleAnnounceModal } from "./announce.js";
-import { handleSetupCommand } from "./setup.js";
+import { handleAddDetailsButton, handleDetailsModal } from "./details.js";
+import { handleDetailQuestionsModal, handleSetupCommand } from "./setup.js";
 import { handleStatsCommand } from "./stats.js";
 import {
   asForumThread,
@@ -46,9 +47,10 @@ export async function handleInteraction(interaction: Interaction) {
 
   try {
     if (interaction.isModalSubmit()) {
-      if (interaction.customId.startsWith(ComponentIds.announce) && interaction.inCachedGuild()) {
-        await handleAnnounceModal(interaction);
-      }
+      if (!interaction.inCachedGuild()) return;
+      if (interaction.customId.startsWith(ComponentIds.announce)) await handleAnnounceModal(interaction);
+      else if (interaction.customId === ComponentIds.detailsForm) await handleDetailsModal(interaction);
+      else if (interaction.customId.startsWith(ComponentIds.setupDetails)) await handleDetailQuestionsModal(interaction);
     } else if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "setup" && interaction.inCachedGuild()) await handleSetupCommand(interaction);
       else if (interaction.commandName === "announce" && interaction.inCachedGuild()) await handleAnnounceCommand(interaction);
@@ -62,6 +64,8 @@ export async function handleInteraction(interaction: Interaction) {
       if (interaction.inCachedGuild()) await handleAnnounceComponent(interaction);
     } else if (interaction.isStringSelectMenu()) {
       if (interaction.customId === ComponentIds.topics) await handleTopicSelect(interaction);
+    } else if (interaction.customId === ComponentIds.addDetails) {
+      await handleAddDetailsButton(interaction);
     } else if (interaction.customId === ComponentIds.createIssue) {
       await handleCreateButton(interaction);
     } else if (interaction.customId === ComponentIds.resolve) {

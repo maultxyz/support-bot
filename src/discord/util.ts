@@ -34,6 +34,10 @@ export const ComponentIds = {
   /** Prefix; followed by a ResolveReason. */
   resolveAs: "support:resolve-as:",
   reactivate: "support:reactivate",
+  addDetails: "support:add-details",
+  detailsForm: "support:details-form",
+  /** Prefix; followed by the forum's channel ID. */
+  setupDetails: "support:setup-details:",
   /** Prefix; followed by the ID of the /announce interaction that opened the modal. */
   announce: "support:announce:",
 } as const;
@@ -42,6 +46,7 @@ export const ComponentIds = {
 export const WelcomeFields = {
   topicPrompt: "🏷️ What is this about?",
   taggedAs: "🏷️ Tagged as",
+  detailsPrompt: "📋 A few details would help",
 } as const;
 
 export const KIND_LABEL: Record<IssueKind, string> = {
@@ -308,6 +313,8 @@ export function welcomeMessage(
   kind: IssueKind,
   thread: AnyThreadChannel,
   related?: { repo: string; similar: SimilarIssue[] },
+  /** Questions for the "Add details" button; empty leaves the button out. */
+  detailQuestions: string[] = [],
 ) {
   const topics = topicTags(thread);
   const topicIds = topics.map((tag) => tag.id);
@@ -331,6 +338,14 @@ export function welcomeMessage(
       value: similarIssueLines(thread, related.repo, related.similar).join("\n"),
     });
   }
+  if (detailQuestions.length) {
+    embed.addFields({
+      name: WelcomeFields.detailsPrompt,
+      value:
+        "Press **Add details** to answer a few quick questions:\n" +
+        detailQuestions.map((question) => `- ${question}`).join("\n"),
+    });
+  }
   if (askForTopics) {
     embed.addFields({
       name: WelcomeFields.topicPrompt,
@@ -338,7 +353,17 @@ export function welcomeMessage(
     });
   }
 
-  const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+  const buttons = new ActionRowBuilder<ButtonBuilder>();
+  if (detailQuestions.length) {
+    buttons.addComponents(
+      new ButtonBuilder()
+        .setCustomId(ComponentIds.addDetails)
+        .setLabel("Add details")
+        .setEmoji("📋")
+        .setStyle(ButtonStyle.Primary),
+    );
+  }
+  buttons.addComponents(
     new ButtonBuilder()
       .setCustomId(ComponentIds.createIssue)
       .setLabel("Track on GitHub")
