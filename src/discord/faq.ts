@@ -1,5 +1,8 @@
 import {
+  ActionRowBuilder,
   AttachmentBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   EmbedBuilder,
   LabelBuilder,
@@ -9,6 +12,7 @@ import {
   TextInputStyle,
   type AnyThreadChannel,
   type AutocompleteInteraction,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
   type ForumChannel,
   type ModalSubmitInteraction,
@@ -16,8 +20,8 @@ import {
   type TextChannel,
 } from "discord.js";
 import { config } from "../config.js";
-import { faqs, forums, posts, type FaqEntry } from "../db.js";
-import { compileFaq, faqEnabled, type Transcript } from "../faq.js";
+import { faqRelevance, faqs, forums, posts, type FaqEntry, type FaqMerge } from "../db.js";
+import { compileFaq, faqEnabled, mergeFaq, type Transcript } from "../faq.js";
 import { keywords, stem } from "../github.js";
 import { SyncError } from "../sync.js";
 import { asForumThread, Colors, ComponentIds, isStaff, isStaffMember, truncate } from "./util.js";
@@ -38,42 +42,12 @@ const MAX_SOURCES = 5;
 const MAX_EMBEDS = 10;
 const MAX_EMBED_CHARS = 6000;
 const MAX_CHOICES = 25;
+/** Entries Merge keeps unless told otherwise. */
+export const DEFAULT_KEEP = 20;
 
-/** `/faq`: compile, edit, publish and send the server's FAQ. Callers check that the user is staff. */
-export async function handleFaqCommand(interaction: ChatInputCommandInteraction<"cached">) {
-  switch (interaction.options.getSubcommand()) {
-    case "generate":
-      return handleGenerate(interaction);
-    case "add":
-      return interaction.showModal(faqModal());
-    case "edit":
-      return interaction.showModal(faqModal(requireEntry(interaction)));
-    case "delete": {
-      const entry = requireEntry(interaction);
-      faqs.remove(interaction.guildId, entry.id);
-      return interaction.reply({ content: `Deleted FAQ #${entry.id}: **${entry.question}**`, flags: MessageFlags.Ephemeral });
-    }
-    case "list":
-      return handleList(interaction);
-    case "publish":
-      return handlePublish(interaction);
-    case "send":
-      return handleSend(interaction);
-  }
-}
-
-function requireEntry(interaction: ChatInputCommandInteraction<"cached">) {
-  const entry = faqs.get(interaction.guildId, Number(interaction.options.getString("entry", true)));
-  if (!entry) throw new SyncError("No FAQ entry found. Pick one from the suggestions as you type.");
-  return entry;
-}
-
-/** `/faq generate`: has Claude add entries for questions the support forums keep getting. */
-async function handleGenerate(interaction: ChatInputCommandInteraction<"cached">) {
+/** Generate: has Claude add entries for questions the support forums keep getting. */
+export async function generateFaq(interaction: ModalSubmitInteraction<"cached">, days: number, resolvedOnly: boolean) {
   if (!faqEnabled()) throw new SyncError("FAQ generation is off. Set `ANTHROPIC_API_KEY` for the bot to turn it on.");
-
-  const days = interaction.options.getInteger("days") ?? 90;
-  const resolvedOnly = interaction.options.getBoolean("resolved_only") ?? true;
 
   const supportForums = forums
     .list(interaction.guildId)
@@ -98,10 +72,20 @@ async function handleGenerate(interaction: ChatInputCommandInteraction<"cached">
   if (transcripts.length === 0) throw new SyncError(`None of those ${which} had any replies to learn from.`);
 
   await interaction.editReply(`Asking Claude to compile a FAQ from ${transcripts.length} posts. This can take a minute or two…`);
-  const compiled = await compileFaq(transcripts, faqs.list(interaction.guildId));
-  if (compiled.length === 0) throw new SyncError("Claude didn't find any new recurring questions in those posts.");
+  const { newEntries, alreadyCovered } = await compileFaq(transcripts, faqs.list(interaction.guildId));
 
-  const added = compiled.map((entry) => {
+  // Posts asking questions the FAQ already answers make those entries rank higher.
+  let counted = 0;
+  for (const match of alreadyCovered) counted += faqs.addSources(interaction.guildId, match.existingId, match.sourceThreadIds);
+  const countedNote = counted
+    ? `${counted} ${counted === 1 ? "post asked a question" : "posts asked questions"} the FAQ already answers, so those entries moved up.`
+    : "";
+  if (newEntries.length === 0) {
+    await interaction.editReply(`No new questions in those posts. ${countedNote}`.trim());
+    return;
+  }
+
+  const added = newEntries.map((entry) => {
     const content = {
       category: truncate(entry.category, MAX_CATEGORY),
       question: truncate(entry.question, MAX_QUESTION),
@@ -114,8 +98,8 @@ async function handleGenerate(interaction: ChatInputCommandInteraction<"cached">
   const lines = added.map((entry) => `\`#${entry.id}\` ${entry.question}`);
   await interaction.editReply({
     content: truncate(
-      `Added **${added.length}** FAQ entries from ${transcripts.length} ${which}. The full text is in the file.\n` +
-        "Fix any with `/faq edit`, remove them with `/faq delete`, and answer posts with `/faq send`.\n\n" +
+      `Added **${added.length}** FAQ entries from ${transcripts.length} ${which}. The full text is in the file. ${countedNote}\n` +
+        "To fix one, open `/faq` and pick it from the list. If any repeat each other, press **Merge** there.\n\n" +
         lines.join("\n"),
       2000,
     ),
@@ -123,40 +107,122 @@ async function handleGenerate(interaction: ChatInputCommandInteraction<"cached">
   });
 }
 
-/** `/faq list`: every entry, shown only to the user. */
-async function handleList(interaction: ChatInputCommandInteraction<"cached">) {
-  const entries = faqs.list(interaction.guildId);
-  if (entries.length === 0) throw new SyncError("The FAQ is empty. Fill it with `/faq generate` or `/faq add`.");
+interface MergePlan {
+  guildId: string;
+  createdAt: number;
+  /** Entries the plan was made from, so it isn't applied over changes made since. */
+  entryIds: number[];
+  merged: FaqMerge[];
+}
 
-  const sections = [...groupByCategory(entries)].map(
-    ([category, list]) =>
-      `**${category}**\n` +
-      list.map((e) => `\`#${e.id}\` ${e.question}${e.uses ? ` · sent ${e.uses}×` : ""}`).join("\n"),
-  );
-  await interaction.reply({
+/** Merge previews waiting for Apply or Cancel, by the ID of the interaction that asked for them. */
+const mergePlans = new Map<string, MergePlan>();
+const MERGE_PLAN_TTL = 15 * 60_000;
+
+/** Merge: has Claude combine duplicates and keep the most asked entries, then shows the result to approve. */
+export async function mergeFaqPreview(interaction: ModalSubmitInteraction<"cached">, keep: number) {
+  if (!faqEnabled()) throw new SyncError("FAQ merging is off. Set `ANTHROPIC_API_KEY` for the bot to turn it on.");
+  const entries = faqs.list(interaction.guildId);
+  if (entries.length < 2) throw new SyncError("The FAQ needs at least two entries to merge.");
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.editReply(`Asking Claude to merge ${entries.length} entries down to at most ${keep}…`);
+  const merged = await mergeFaq(entries, keep);
+  if (merged.length === 0) throw new SyncError("Claude didn't return any entries. Nothing was changed.");
+
+  for (const [key, plan] of mergePlans) if (Date.now() - plan.createdAt > MERGE_PLAN_TTL) mergePlans.delete(key);
+  mergePlans.set(interaction.id, {
+    guildId: interaction.guildId,
+    createdAt: Date.now(),
+    entryIds: entries.map((entry) => entry.id),
+    merged,
+  });
+
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const kept = new Set(merged.flatMap((item) => item.ids));
+  const dropped = entries.filter((entry) => !kept.has(entry.id));
+  const asked = (item: FaqMerge) => item.ids.reduce((sum, id) => sum + faqRelevance(byId.get(id)!), 0);
+
+  const lines = merged.map((item, index) => {
+    const others = item.ids.slice(1).map((id) => `#${id}`);
+    const note = others.length ? ` · merges #${item.ids[0]} with ${others.join(", ")}` : ` · #${item.ids[0]}`;
+    return `${index + 1}. **${item.question}** · asked ${asked(item)}×${note}`;
+  });
+  const removed = dropped.length
+    ? `\n\n**Removed (${dropped.length}):** ${dropped.map((e) => `#${e.id} ${e.question}`).join(" · ")}`
+    : "";
+
+  await interaction.editReply({
+    content: `Here's the merged FAQ: **${entries.length}** entries become **${merged.length}**, most asked first. ` +
+      "The full text is in the file. Nothing changes until you press **Apply**; this preview expires in 15 minutes.",
     embeds: [
       new EmbedBuilder()
-        .setColor(Colors.brand)
-        .setTitle(`FAQ: ${entries.length} ${entries.length === 1 ? "entry" : "entries"}`)
-        .setDescription(truncate(sections.join("\n\n"), 4096)),
+        .setColor(Colors.warning)
+        .setTitle("Merged FAQ preview")
+        .setDescription(truncate(lines.join("\n") + removed, 4096)),
     ],
-    files: [markdownFile(entries)],
-    flags: MessageFlags.Ephemeral,
+    files: [
+      markdownFile(
+        merged.map((item, index) => ({ ...byId.get(item.ids[0]!)!, ...item, id: item.ids[0]!, position: index + 1 })),
+        "FAQ-merged.md",
+      ),
+    ],
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${ComponentIds.faqMerge}apply:${interaction.id}`)
+          .setLabel("Apply")
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`${ComponentIds.faqMerge}cancel:${interaction.id}`)
+          .setLabel("Cancel")
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    ],
   });
 }
 
-/** `/faq publish`: posts the whole FAQ for people to browse. */
-async function handlePublish(interaction: ChatInputCommandInteraction<"cached">) {
-  const target = interaction.options.getChannel("channel", true, [
-    ChannelType.GuildText,
-    ChannelType.GuildAnnouncement,
-    ChannelType.GuildForum,
-  ]);
+/** Apply or Cancel on a merge preview. */
+export async function handleFaqMergeButton(interaction: ButtonInteraction<"cached">) {
+  if (!isStaff(interaction)) throw new SyncError("Only staff can merge the FAQ.");
+  const [action, key] = interaction.customId.slice(ComponentIds.faqMerge.length).split(":");
+  const plan = mergePlans.get(key!);
+  mergePlans.delete(key!);
+
+  if (action === "cancel") {
+    await interaction.update({ content: "Merge cancelled. The FAQ wasn't changed.", embeds: [], attachments: [], components: [] });
+    return;
+  }
+  if (!plan || plan.guildId !== interaction.guildId || Date.now() - plan.createdAt > MERGE_PLAN_TTL) {
+    throw new SyncError("This preview expired. Open `/faq` and press **Merge** again.");
+  }
+
+  // Don't throw away edits, new entries or deletions made after the preview was built.
+  const current = faqs.list(interaction.guildId);
+  const changed =
+    current.length !== plan.entryIds.length ||
+    current.some((entry) => !plan.entryIds.includes(entry.id) || entry.updatedAt > plan.createdAt);
+  if (changed) throw new SyncError("The FAQ changed after this preview was made. Open `/faq` and press **Merge** again.");
+
+  faqs.merge(interaction.guildId, plan.merged, interaction.user.id);
+  await interaction.update({
+    content: `Merged. The FAQ now has **${plan.merged.length}** entries, most asked first. Open \`/faq\` to see them.`,
+    embeds: [],
+    attachments: [],
+    components: [],
+  });
+}
+
+/** Publish: posts the whole FAQ for people to browse. */
+export async function publishFaq(
+  interaction: ModalSubmitInteraction<"cached">,
+  target: TextChannel | NewsChannel | ForumChannel,
+) {
   if (forums.get(target.id)) {
     throw new SyncError("Pick a channel the bot doesn't manage; FAQ posts would be treated as new support posts.");
   }
   const entries = faqs.list(interaction.guildId);
-  if (entries.length === 0) throw new SyncError("The FAQ is empty. Fill it with `/faq generate` or `/faq add`.");
+  if (entries.length === 0) throw new SyncError("The FAQ is empty. Add entries first.");
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   if (target.type === ChannelType.GuildForum) await postToForum(target, entries);
@@ -164,9 +230,10 @@ async function handlePublish(interaction: ChatInputCommandInteraction<"cached">)
   await interaction.editReply(`Posted ${entries.length} FAQ entries to ${target}.`);
 }
 
-/** `/faq send`: answers the current post (or any channel) with an entry. */
-async function handleSend(interaction: ChatInputCommandInteraction<"cached">) {
-  const entry = requireEntry(interaction);
+/** `/faq entry:…`: answers the current post (or any channel) with an entry. */
+export async function sendFaqEntry(interaction: ChatInputCommandInteraction<"cached">, entryOption: string) {
+  const entry = faqs.get(interaction.guildId, Number(entryOption));
+  if (!entry) throw new SyncError("No FAQ entry found. Pick one from the suggestions as you type.");
   if (!interaction.channel?.isSendable()) throw new SyncError("I can't post in this channel.");
 
   // In a support post, ping whoever asked unless someone else was picked.
@@ -197,11 +264,10 @@ export async function handleFaqAutocomplete(interaction: AutocompleteInteraction
     fromPost = true;
   }
 
+  // Most asked first; with nothing to match, or nothing in the post matching, that's the order shown.
   const entries = faqs.list(interaction.guildId);
-  let ranked = rank(entries, query);
-  // Nothing in the post matched: still let staff browse every entry.
+  let ranked = query ? rank(entries, query) : entries;
   if (fromPost && ranked.length === 0) ranked = entries;
-  if (!query) ranked = [...entries].sort((a, b) => b.uses - a.uses);
 
   await interaction.respond(
     ranked.slice(0, MAX_CHOICES).map((entry) => ({
@@ -211,7 +277,10 @@ export async function handleFaqAutocomplete(interaction: AutocompleteInteraction
   );
 }
 
-/** Entries that share words with `query`, best first. Partial words count, so results update while typing. */
+/**
+ * Entries that share words with `query`, best match first, then most asked (the order `entries` comes in).
+ * Partial words count, so results update while typing.
+ */
 function rank(entries: FaqEntry[], query: string) {
   const terms = keywords(query).map(stem);
   const lowered = query.toLowerCase();
@@ -228,11 +297,12 @@ function rank(entries: FaqEntry[], query: string) {
       return { entry, score };
     })
     .filter(({ score }) => score > 0)
-    .sort((a, b) => b.score - a.score || b.entry.uses - a.entry.uses)
+    .sort((a, b) => b.score - a.score)
     .map(({ entry }) => entry);
 }
 
-function faqModal(entry?: FaqEntry) {
+/** The add/edit form. */
+export function faqModal(entry?: FaqEntry) {
   const field = (id: string, label: string, style: TextInputStyle, max: number, value?: string) => {
     const input = new TextInputBuilder().setCustomId(id).setStyle(style).setMaxLength(max).setRequired(true);
     if (value) input.setValue(value);
@@ -248,9 +318,8 @@ function faqModal(entry?: FaqEntry) {
     );
 }
 
-/** The submitted add/edit form. */
-export async function handleFaqModal(interaction: ModalSubmitInteraction<"cached">) {
-  if (!isStaff(interaction)) throw new SyncError("Only staff can edit the FAQ.");
+/** Saves the submitted add/edit form and returns the saved entry. */
+export function saveFaqForm(interaction: ModalSubmitInteraction<"cached">) {
   const content = {
     question: interaction.fields.getTextInputValue("question").trim(),
     answer: interaction.fields.getTextInputValue("answer").trim(),
@@ -264,15 +333,10 @@ export async function handleFaqModal(interaction: ModalSubmitInteraction<"cached
   } else {
     id = Number(target);
     if (!faqs.update(interaction.guildId, id, content, interaction.user.id)) {
-      throw new SyncError("That entry was deleted while you were editing it. Use `/faq add` to save it again.");
+      throw new SyncError("That entry was deleted while you were editing it. Press **Add entry** in `/faq` to save it again.");
     }
   }
-
-  await interaction.reply({
-    content: `Saved FAQ #${id}. This is how \`/faq send\` will show it:`,
-    embeds: [entryEmbed(faqs.get(interaction.guildId, id)!)],
-    flags: MessageFlags.Ephemeral,
-  });
+  return faqs.get(interaction.guildId, id)!;
 }
 
 /**
@@ -342,7 +406,7 @@ function sources(entry: FaqEntry) {
   return ids.length ? `-# Similar posts: ${ids.map((id) => `<#${id}>`).join(" ")}` : "";
 }
 
-function entryEmbed(entry: FaqEntry) {
+export function entryEmbed(entry: FaqEntry) {
   const footer = sources(entry);
   return new EmbedBuilder()
     .setColor(Colors.brand)
@@ -370,9 +434,12 @@ async function postToChannel(channel: TextChannel | NewsChannel, entries: FaqEnt
   if (batch.length) await channel.send({ embeds: batch });
 }
 
-/** Creates one forum post per entry, so each question can be searched and linked on its own. */
+/**
+ * Creates one forum post per entry, so each question can be searched and linked on its own. The most asked
+ * entry is created last, so it's on top when the forum is sorted by recent activity.
+ */
 async function postToForum(forum: ForumChannel, entries: FaqEntry[]) {
-  for (const entry of entries) {
+  for (const entry of [...entries].reverse()) {
     const tag = forum.availableTags.find((t) => t.name.toLowerCase() === entry.category.toLowerCase());
     await forum.threads.create({
       name: truncate(entry.question, 100),
@@ -382,16 +449,10 @@ async function postToForum(forum: ForumChannel, entries: FaqEntry[]) {
   }
 }
 
-function groupByCategory(entries: FaqEntry[]) {
-  const byCategory = new Map<string, FaqEntry[]>();
-  for (const entry of entries) byCategory.set(entry.category, [...(byCategory.get(entry.category) ?? []), entry]);
-  return byCategory;
-}
-
-function markdownFile(entries: FaqEntry[]) {
-  const sections = [...groupByCategory(entries)].map(
-    ([category, list]) =>
-      `## ${category}\n\n${list.map((e) => `### ${e.question} (#${e.id})\n\n${e.answer}`).join("\n\n")}`,
+/** The entries in the order given (most asked first), as a markdown file. */
+export function markdownFile(entries: FaqEntry[], name = "FAQ.md") {
+  const sections = entries.map(
+    (e, index) => `## ${index + 1}. ${e.question}\n\n-# ${e.category} · #${e.id}\n\n${e.answer}`,
   );
-  return new AttachmentBuilder(Buffer.from(`# Frequently asked questions\n\n${sections.join("\n\n")}\n`), { name: "FAQ.md" });
+  return new AttachmentBuilder(Buffer.from(`# Frequently asked questions\n\n${sections.join("\n\n")}\n`), { name });
 }

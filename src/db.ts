@@ -88,6 +88,7 @@ function addColumn(table: string, column: string, definition: string) {
 addColumn("forums", "repo", "TEXT");
 // JSON array of questions; NULL means the defaults for the forum's kind.
 addColumn("forums", "detail_questions", "TEXT");
+addColumn("faq_entries", "position", "INTEGER");
 
 export interface IssueLink {
   threadId: string;
@@ -458,17 +459,33 @@ export interface FaqEntry {
   category: string;
   question: string;
   answer: string;
-  /** Posts the entry was compiled from; empty for entries written by hand. */
+  /** Posts that asked this question; empty for entries written by hand. */
   sourceThreadIds: string[];
   updatedBy: string;
   updatedAt: number;
   /** Times it was sent with /faq send. */
   uses: number;
+  /** Importance from the last /faq merge (1 is most important); null for entries added since. Breaks ties. */
+  position: number | null;
+}
+
+/** How often a question comes up: posts that asked it, plus times staff answered a post with it. */
+export function faqRelevance(entry: FaqEntry) {
+  return entry.sourceThreadIds.length + entry.uses;
+}
+
+/** Most asked first; ties go to the order from the last merge, then the oldest entry. */
+function byRelevance(a: FaqEntry, b: FaqEntry) {
+  return (
+    faqRelevance(b) - faqRelevance(a) ||
+    (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER) ||
+    a.id - b.id
+  );
 }
 
 const FAQ_SELECT = `
   SELECT id, guild_id AS guildId, category, question, answer, source_thread_ids AS sourceThreadIds,
-         updated_by AS updatedBy, updated_at AS updatedAt, uses
+         updated_by AS updatedBy, updated_at AS updatedAt, uses, position
   FROM faq_entries`;
 
 function toFaqEntry(row: unknown): FaqEntry {
@@ -478,17 +495,27 @@ function toFaqEntry(row: unknown): FaqEntry {
 
 const faqStatements = {
   get: db.prepare(`${FAQ_SELECT} WHERE id = ? AND guild_id = ?`),
-  list: db.prepare(`${FAQ_SELECT} WHERE guild_id = ? ORDER BY category COLLATE NOCASE, question COLLATE NOCASE`),
+  list: db.prepare(`${FAQ_SELECT} WHERE guild_id = ?`),
   insert: db.prepare(`
     INSERT INTO faq_entries (guild_id, category, question, answer, source_thread_ids, updated_by, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`),
   update: db.prepare(`
     UPDATE faq_entries SET category = ?, question = ?, answer = ?, updated_by = ?, updated_at = ? WHERE id = ? AND guild_id = ?`),
+  sources: db.prepare(`UPDATE faq_entries SET source_thread_ids = ? WHERE id = ?`),
+  merged: db.prepare(`
+    UPDATE faq_entries SET category = ?, question = ?, answer = ?, source_thread_ids = ?, uses = ?, position = ?,
+                           updated_by = ?, updated_at = ?
+    WHERE id = ?`),
   remove: db.prepare(`DELETE FROM faq_entries WHERE id = ? AND guild_id = ?`),
   used: db.prepare(`UPDATE faq_entries SET uses = uses + 1 WHERE id = ?`),
 };
 
 type FaqContent = Pick<FaqEntry, "category" | "question" | "answer">;
+
+/** One entry of the FAQ after /faq merge: the IDs it combines (the first one is kept) and its new text. */
+export interface FaqMerge extends FaqContent {
+  ids: number[];
+}
 
 /** FAQ entries compiled with /faq generate or written with /faq add, which staff can edit and send into posts. */
 export const faqs = {
@@ -496,8 +523,9 @@ export const faqs = {
     const row = faqStatements.get.get(id, guildId);
     return row ? toFaqEntry(row) : undefined;
   },
+  /** Every entry, most asked first. */
   list(guildId: string) {
-    return faqStatements.list.all(guildId).map(toFaqEntry);
+    return faqStatements.list.all(guildId).map(toFaqEntry).sort(byRelevance);
   },
   add(guildId: string, content: FaqContent & { sourceThreadIds?: string[] }, userId: string) {
     const result = faqStatements.insert.run(
@@ -505,7 +533,7 @@ export const faqs = {
       content.category,
       content.question,
       content.answer,
-      (content.sourceThreadIds ?? []).join(","),
+      [...new Set(content.sourceThreadIds)].join(","),
       userId,
       Date.now(),
     );
@@ -516,6 +544,39 @@ export const faqs = {
     return (
       faqStatements.update.run(content.category, content.question, content.answer, userId, Date.now(), id, guildId).changes > 0
     );
+  },
+  /** Records more posts that asked an entry's question. Returns how many of them weren't recorded yet. */
+  addSources(guildId: string, id: number, threadIds: string[]) {
+    const entry = faqs.get(guildId, id);
+    if (!entry) return 0;
+    const sources = new Set([...entry.sourceThreadIds, ...threadIds]);
+    faqStatements.sources.run([...sources].join(","), id);
+    return sources.size - entry.sourceThreadIds.length;
+  },
+  /**
+   * Replaces the FAQ with `merged`, in order of importance: each item keeps its first entry, takes the posts and
+   * use counts of the others, and deletes them. Entries not in `merged` are deleted too.
+   */
+  merge(guildId: string, merged: FaqMerge[], userId: string) {
+    const entries = new Map(faqs.list(guildId).map((entry) => [entry.id, entry]));
+    db.exec("BEGIN");
+    try {
+      merged.forEach((item, index) => {
+        const parts = item.ids.map((id) => entries.get(id)!);
+        const sources = new Set(parts.flatMap((part) => part.sourceThreadIds));
+        const uses = parts.reduce((sum, part) => sum + part.uses, 0);
+        faqStatements.merged.run(
+          item.category, item.question, item.answer, [...sources].join(","), uses, index + 1, userId, Date.now(), item.ids[0]!,
+        );
+        // The first entry was updated above; any others were merged into it, so they're deleted below.
+        entries.delete(item.ids[0]!);
+      });
+      for (const id of entries.keys()) faqStatements.remove.run(id, guildId);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   },
   /** Returns true if the entry existed. */
   remove(guildId: string, id: number) {
