@@ -66,6 +66,18 @@ db.exec(`
     created_by TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS faq_entries (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id          TEXT NOT NULL,
+    category          TEXT NOT NULL,
+    question          TEXT NOT NULL,
+    answer            TEXT NOT NULL,
+    source_thread_ids TEXT NOT NULL DEFAULT '',
+    updated_by        TEXT NOT NULL,
+    updated_at        INTEGER NOT NULL,
+    uses              INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS faq_entries_guild ON faq_entries (guild_id);
 `);
 
 // Columns added after the first release.
@@ -133,7 +145,7 @@ export const links = {
   },
 };
 
-const removeGuildStatements = ["issue_links", "forums", "staff_roles", "posts", "guild_settings", "announcements", "post_details"].map((table) =>
+const removeGuildStatements = ["issue_links", "forums", "staff_roles", "posts", "guild_settings", "announcements", "post_details", "faq_entries"].map((table) =>
   db.prepare(`DELETE FROM ${table} WHERE guild_id = ?`),
 );
 
@@ -437,5 +449,79 @@ export const postDetails = {
   },
   remove(threadId: string) {
     detailStatements.remove.run(threadId);
+  },
+};
+
+export interface FaqEntry {
+  id: number;
+  guildId: string;
+  category: string;
+  question: string;
+  answer: string;
+  /** Posts the entry was compiled from; empty for entries written by hand. */
+  sourceThreadIds: string[];
+  updatedBy: string;
+  updatedAt: number;
+  /** Times it was sent with /faq send. */
+  uses: number;
+}
+
+const FAQ_SELECT = `
+  SELECT id, guild_id AS guildId, category, question, answer, source_thread_ids AS sourceThreadIds,
+         updated_by AS updatedBy, updated_at AS updatedAt, uses
+  FROM faq_entries`;
+
+function toFaqEntry(row: unknown): FaqEntry {
+  const entry = row as Omit<FaqEntry, "sourceThreadIds"> & { sourceThreadIds: string };
+  return { ...entry, sourceThreadIds: entry.sourceThreadIds.split(",").filter(Boolean) };
+}
+
+const faqStatements = {
+  get: db.prepare(`${FAQ_SELECT} WHERE id = ? AND guild_id = ?`),
+  list: db.prepare(`${FAQ_SELECT} WHERE guild_id = ? ORDER BY category COLLATE NOCASE, question COLLATE NOCASE`),
+  insert: db.prepare(`
+    INSERT INTO faq_entries (guild_id, category, question, answer, source_thread_ids, updated_by, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`),
+  update: db.prepare(`
+    UPDATE faq_entries SET category = ?, question = ?, answer = ?, updated_by = ?, updated_at = ? WHERE id = ? AND guild_id = ?`),
+  remove: db.prepare(`DELETE FROM faq_entries WHERE id = ? AND guild_id = ?`),
+  used: db.prepare(`UPDATE faq_entries SET uses = uses + 1 WHERE id = ?`),
+};
+
+type FaqContent = Pick<FaqEntry, "category" | "question" | "answer">;
+
+/** FAQ entries compiled with /faq generate or written with /faq add, which staff can edit and send into posts. */
+export const faqs = {
+  get(guildId: string, id: number) {
+    const row = faqStatements.get.get(id, guildId);
+    return row ? toFaqEntry(row) : undefined;
+  },
+  list(guildId: string) {
+    return faqStatements.list.all(guildId).map(toFaqEntry);
+  },
+  add(guildId: string, content: FaqContent & { sourceThreadIds?: string[] }, userId: string) {
+    const result = faqStatements.insert.run(
+      guildId,
+      content.category,
+      content.question,
+      content.answer,
+      (content.sourceThreadIds ?? []).join(","),
+      userId,
+      Date.now(),
+    );
+    return Number(result.lastInsertRowid);
+  },
+  /** Returns true if the entry exists. */
+  update(guildId: string, id: number, content: FaqContent, userId: string) {
+    return (
+      faqStatements.update.run(content.category, content.question, content.answer, userId, Date.now(), id, guildId).changes > 0
+    );
+  },
+  /** Returns true if the entry existed. */
+  remove(guildId: string, id: number) {
+    return faqStatements.remove.run(id, guildId).changes > 0;
+  },
+  markUsed(id: number) {
+    faqStatements.used.run(id);
   },
 };

@@ -40,6 +40,8 @@ export const ComponentIds = {
   setupDetails: "support:setup-details:",
   /** Prefix; followed by the ID of the /announce interaction that opened the modal. */
   announce: "support:announce:",
+  /** Prefix; followed by the FAQ entry's ID, or "new". */
+  faqForm: "support:faq-form:",
 } as const;
 
 /** Names of the welcome message's embed fields that get swapped out later. */

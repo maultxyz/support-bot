@@ -116,12 +116,12 @@ const STOP_WORDS = new Set(
   ).split(" "),
 );
 
-function keywords(text: string) {
+export function keywords(text: string) {
   const words = text.toLowerCase().replaceAll("'", "").match(/[\p{L}\p{N}]+/gu) ?? [];
   return [...new Set(words)].filter((word) => word.length >= 3 && !STOP_WORDS.has(word));
 }
 
-function stem(word: string) {
+export function stem(word: string) {
   const stemmed = word.replace(/(?:ing|ed|es|s)$/, "");
   return stemmed.length >= 3 ? stemmed : word;
 }

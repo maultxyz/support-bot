@@ -4,6 +4,7 @@ import {
   PermissionFlagsBits,
   SlashCommandBuilder,
   type Client,
+  type SlashCommandStringOption,
 } from "discord.js";
 
 export const commands = [
@@ -238,13 +239,22 @@ export const commands = [
 
   new SlashCommandBuilder()
     .setName("faq")
-    .setDescription("Compile a FAQ from resolved support posts with Claude")
+    .setDescription("Build the FAQ and answer posts with it")
     .setContexts(InteractionContextType.Guild)
     // Visible to everyone so roles added with /setup staff can use it; access is checked at runtime.
     .addSubcommand((sub) =>
       sub
+        .setName("send")
+        .setDescription("Answer this post with a FAQ entry (suggestions match the post)")
+        .addStringOption((opt) => faqEntryOption(opt).setDescription("The entry; leave empty to see ones matching this post"))
+        .addUserOption((opt) =>
+          opt.setName("user").setDescription("Who to ping (default: whoever opened this post)"),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
         .setName("generate")
-        .setDescription("Draft a FAQ from the support forums' history, or post it to a channel")
+        .setDescription("Have Claude add entries from the support forums' history")
         .addIntegerOption((opt) =>
           opt.setName("days").setDescription("How many days of forum history to read (default: 90)").setMinValue(1).setMaxValue(365),
         )
@@ -252,15 +262,39 @@ export const commands = [
           opt
             .setName("resolved_only")
             .setDescription("Only use posts tagged Resolved; false uses any post with replies (default: true)"),
-        )
+        ),
+    )
+    .addSubcommand((sub) => sub.setName("add").setDescription("Write a new FAQ entry (opens a form)"))
+    .addSubcommand((sub) =>
+      sub
+        .setName("edit")
+        .setDescription("Change a FAQ entry (opens a form)")
+        .addStringOption((opt) => faqEntryOption(opt)),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("delete")
+        .setDescription("Remove a FAQ entry")
+        .addStringOption((opt) => faqEntryOption(opt)),
+    )
+    .addSubcommand((sub) => sub.setName("list").setDescription("Show every FAQ entry, only to you"))
+    .addSubcommand((sub) =>
+      sub
+        .setName("publish")
+        .setDescription("Post the whole FAQ to a channel; a forum gets one post per question")
         .addChannelOption((opt) =>
           opt
             .setName("channel")
-            .setDescription("Where to post the FAQ; a forum gets one post per question (default: only show a draft)")
+            .setDescription("Where to post it")
+            .setRequired(true)
             .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildForum),
         ),
     ),
 ].map((command) => command.toJSON());
+
+function faqEntryOption(opt: SlashCommandStringOption) {
+  return opt.setName("entry").setDescription("The entry (type to search)").setRequired(true).setAutocomplete(true);
+}
 
 /** Registers commands globally so they work in every server the bot is invited to. */
 export async function registerCommands(client: Client<true>) {

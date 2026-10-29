@@ -15,7 +15,7 @@ import { createIssueForThread, linkExistingIssue, resolveThread, SyncError, unli
 import { INACTIVE_REASON, reactivatePost } from "../tracking.js";
 import { handleAnnounceCommand, handleAnnounceComponent, handleAnnounceModal } from "./announce.js";
 import { handleAddDetailsButton, handleDetailsModal } from "./details.js";
-import { handleFaqCommand } from "./faq.js";
+import { handleFaqAutocomplete, handleFaqCommand, handleFaqModal } from "./faq.js";
 import { handleDetailQuestionsModal, handleSetupCommand } from "./setup.js";
 import { handleStatsCommand } from "./stats.js";
 import {
@@ -37,6 +37,14 @@ import {
 type ThreadInteraction = ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
 
 export async function handleInteraction(interaction: Interaction) {
+  if (interaction.isAutocomplete()) {
+    if (interaction.commandName === "faq" && interaction.inCachedGuild()) {
+      // Suggestions that fail just come up empty; the command itself reports errors.
+      await handleFaqAutocomplete(interaction).catch((error) => console.error("FAQ autocomplete failed:", error));
+    }
+    return;
+  }
+
   if (
     !interaction.isChatInputCommand() &&
     !interaction.isButton() &&
@@ -52,6 +60,7 @@ export async function handleInteraction(interaction: Interaction) {
       if (interaction.customId.startsWith(ComponentIds.announce)) await handleAnnounceModal(interaction);
       else if (interaction.customId === ComponentIds.detailsForm) await handleDetailsModal(interaction);
       else if (interaction.customId.startsWith(ComponentIds.setupDetails)) await handleDetailQuestionsModal(interaction);
+      else if (interaction.customId.startsWith(ComponentIds.faqForm)) await handleFaqModal(interaction);
     } else if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "setup" && interaction.inCachedGuild()) await handleSetupCommand(interaction);
       else if (interaction.commandName === "announce" && interaction.inCachedGuild()) await handleAnnounceCommand(interaction);
@@ -61,7 +70,7 @@ export async function handleInteraction(interaction: Interaction) {
         requireStaff(interaction, "Only staff can see support stats.");
         await handleStatsCommand(interaction);
       } else if (interaction.commandName === "faq" && interaction.inCachedGuild()) {
-        requireStaff(interaction, "Only staff can compile the FAQ.");
+        requireStaff(interaction, "Only staff can use the FAQ commands.");
         await handleFaqCommand(interaction);
       }
     } else if (interaction.customId.startsWith(ComponentIds.announce)) {

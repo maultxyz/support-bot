@@ -21,7 +21,7 @@ const FaqSchema = z.object({
   ),
 });
 
-export type FaqEntry = z.infer<typeof FaqSchema>["entries"][number];
+export type CompiledFaq = z.infer<typeof FaqSchema>["entries"][number];
 
 const SYSTEM = `You compile a FAQ from resolved support threads in a Discord server.
 
@@ -34,7 +34,10 @@ version numbers that aren't there. Prefer the Staff answer when replies disagree
 unlikely to help anyone else, and leave out names, usernames, emails, keys and anything else personal.
 
 Write answers that make sense on their own, without the thread: plain, direct, and short enough to read at a glance.
-Use Discord markdown (bold, lists, \`code\`) where it helps. Order entries by category, most common questions first.`;
+Use Discord markdown (bold, lists, \`code\`) where it helps. Order entries by category, most common questions first.
+
+The server may already have a FAQ, listed in <existing_faq>. Don't repeat a question it already covers; only add
+new ones. Reuse its category names where they fit.`;
 
 let client: Anthropic | undefined;
 
@@ -42,13 +45,17 @@ export function faqEnabled() {
   return Boolean(config.ANTHROPIC_API_KEY);
 }
 
-/** Asks Claude to turn resolved support threads into FAQ entries. */
-export async function compileFaq(transcripts: Transcript[]): Promise<FaqEntry[]> {
+/** Asks Claude to turn resolved support threads into FAQ entries, skipping questions `existing` already covers. */
+export async function compileFaq(
+  transcripts: Transcript[],
+  existing: { category: string; question: string }[],
+): Promise<CompiledFaq[]> {
   client ??= new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
 
   const threads = transcripts
     .map((t) => `<thread id="${t.threadId}" title="${escapeAttr(t.title)}">\n${t.messages.join("\n")}\n</thread>`)
     .join("\n\n");
+  const existingFaq = existing.map((entry) => `- [${entry.category}] ${entry.question}`).join("\n") || "(none yet)";
 
   const response = await client.beta.messages.parse({
     model: config.FAQ_MODEL,
@@ -58,7 +65,14 @@ export async function compileFaq(transcripts: Transcript[]): Promise<FaqEntry[]>
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
     system: SYSTEM,
-    messages: [{ role: "user", content: `${threads}\n\nCompile the FAQ from these ${transcripts.length} threads.` }],
+    messages: [
+      {
+        role: "user",
+        content:
+          `<existing_faq>\n${existingFaq}\n</existing_faq>\n\n${threads}\n\n` +
+          `Compile new FAQ entries from these ${transcripts.length} threads.`,
+      },
+    ],
   });
 
   if (response.stop_reason === "refusal") throw new Error("Claude declined to compile the FAQ.");
