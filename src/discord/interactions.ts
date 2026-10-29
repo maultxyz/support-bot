@@ -15,7 +15,7 @@ import { createIssueForThread, linkExistingIssue, resolveThread, SyncError, unli
 import { INACTIVE_REASON, reactivatePost } from "../tracking.js";
 import { handleAnnounceCommand, handleAnnounceComponent, handleAnnounceModal } from "./announce.js";
 import { handleAddDetailsButton, handleDetailsModal } from "./details.js";
-import { handleFaqAutocomplete, handleFaqMergeButton } from "./faq.js";
+import { handleFaqAnswerButton, handleFaqAnswerPick, handleFaqAutocomplete, handleFaqMergeButton } from "./faq.js";
 import { handleFaqCommand, handleFaqPanelComponent, handleFaqPanelModal } from "./faq-panel.js";
 import { handleDetailQuestionsModal, handleSetupCommand } from "./setup.js";
 import { handleStatsCommand } from "./stats.js";
@@ -78,6 +78,10 @@ export async function handleInteraction(interaction: Interaction) {
       }
     } else if (interaction.customId.startsWith(ComponentIds.announce)) {
       if (interaction.inCachedGuild()) await handleAnnounceComponent(interaction);
+    } else if (interaction.customId === ComponentIds.faqAnswer) {
+      if (interaction.isButton() && interaction.inCachedGuild()) await handleFaqAnswerButton(interaction);
+    } else if (interaction.customId === ComponentIds.faqAnswerPick) {
+      if (interaction.isStringSelectMenu() && interaction.inCachedGuild()) await handleFaqAnswerPick(interaction);
     } else if (interaction.customId.startsWith(ComponentIds.faqMerge)) {
       if (interaction.isButton() && interaction.inCachedGuild()) await handleFaqMergeButton(interaction);
     } else if (interaction.customId.startsWith(ComponentIds.faq)) {

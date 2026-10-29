@@ -40,6 +40,9 @@ export const ComponentIds = {
   setupDetails: "support:setup-details:",
   /** Prefix; followed by the ID of the /announce interaction that opened the modal. */
   announce: "support:announce:",
+  /** Staff button on new support posts that answers the post with a FAQ entry, and the menu it opens. */
+  faqAnswer: "support:faq-answer",
+  faqAnswerPick: "support:faq-answer-pick",
   /** Prefix for the /faq panel's buttons, menu and forms; followed by the action and its argument. */
   faq: "support:faq:",
   /** Prefix; followed by the FAQ entry's ID, or "new". */
@@ -321,6 +324,8 @@ export function welcomeMessage(
   related?: { repo: string; similar: SimilarIssue[] },
   /** Questions for the "Add details" button; empty leaves the button out. */
   detailQuestions: string[] = [],
+  /** Adds the staff-only "FAQ answer" button, for servers that have FAQ entries. */
+  faqButton = false,
 ) {
   const topics = topicTags(thread);
   const topicIds = topics.map((tag) => tag.id);
@@ -367,6 +372,15 @@ export function welcomeMessage(
         .setLabel("Add details")
         .setEmoji("📋")
         .setStyle(ButtonStyle.Primary),
+    );
+  }
+  if (faqButton) {
+    buttons.addComponents(
+      new ButtonBuilder()
+        .setCustomId(ComponentIds.faqAnswer)
+        .setLabel("FAQ answer (staff)")
+        .setEmoji("📚")
+        .setStyle(ButtonStyle.Secondary),
     );
   }
   buttons.addComponents(

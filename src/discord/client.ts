@@ -9,7 +9,7 @@ import {
   type AnyThreadChannel,
 } from "discord.js";
 import { config } from "../config.js";
-import { announcements, forums, links, postDetails, posts, removeGuildData, staffRoles } from "../db.js";
+import { announcements, faqs, forums, links, postDetails, posts, removeGuildData, staffRoles } from "../db.js";
 import { findSimilarIssues } from "../github.js";
 import { logWarning, mirrorMessageToIssue, syncTopicLabels } from "../sync.js";
 import { recordReply, scheduleVoteSync, startScheduledChecks, trackPost } from "../tracking.js";
@@ -121,8 +121,9 @@ async function onPostCreated(thread: AnyThreadChannel) {
     try {
       const starter = await thread.fetchStarterMessage().catch(() => null);
       const questions = isThinPost(starter) ? detailQuestions(thread.parentId!) : [];
+      const faqButton = context.kind === "support" && faqs.list(thread.guildId).length > 0;
       await thread.send(
-        welcomeMessage(context.kind, thread, repo ? { repo, similar: await similar } : undefined, questions),
+        welcomeMessage(context.kind, thread, repo ? { repo, similar: await similar } : undefined, questions, faqButton),
       );
       return;
     } catch (error) {

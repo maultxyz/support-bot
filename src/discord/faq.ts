@@ -8,6 +8,7 @@ import {
   LabelBuilder,
   MessageFlags,
   ModalBuilder,
+  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
   type AnyThreadChannel,
@@ -17,6 +18,7 @@ import {
   type ForumChannel,
   type ModalSubmitInteraction,
   type NewsChannel,
+  type StringSelectMenuInteraction,
   type TextChannel,
 } from "discord.js";
 import { config } from "../config.js";
@@ -247,9 +249,77 @@ export async function sendFaqEntry(interaction: ChatInputCommandInteraction<"cac
     allowedMentions: { users: mention ? [mention] : [] },
   });
 
+  recordSent(entry, post?.thread);
+}
+
+/** Counts a sent entry toward its "asked" total, and as a staff answer for alerts, auto-close and /stats. */
+function recordSent(entry: FaqEntry, thread?: AnyThreadChannel) {
   faqs.markUsed(entry.id);
-  // Counts as a staff answer for unanswered alerts, auto-close and /stats.
-  if (post && posts.get(post.thread.id)) posts.markStaffReply(post.thread.id);
+  if (thread && posts.get(thread.id)) posts.markStaffReply(thread.id);
+}
+
+/** The "FAQ answer" button on a new support post: shows staff a menu of entries, best matches for the post first. */
+export async function handleFaqAnswerButton(interaction: ButtonInteraction<"cached">) {
+  if (!isStaff(interaction)) {
+    throw new SyncError("Only staff can answer with a FAQ entry. Someone from the team will be with you soon.");
+  }
+  const post = asForumThread(interaction.channel);
+  if (!post) throw new SyncError("Use this inside a support post.");
+  const entries = faqs.list(interaction.guildId);
+  if (entries.length === 0) throw new SyncError("The FAQ is empty. Add entries with `/faq`.");
+
+  const starter = await post.thread.fetchStarterMessage().catch(() => null);
+  const matches = rank(entries, `${post.thread.name} ${starter?.content ?? ""}`);
+  const matchIds = new Set(matches.map((entry) => entry.id));
+  // Best matches first, then the rest of the most asked, so staff can still pick something else.
+  const options = [...matches, ...entries.filter((entry) => !matchIds.has(entry.id))].slice(0, MAX_CHOICES);
+
+  const more = entries.length > options.length
+    ? `\nNot listed? Run \`/faq\` here and type in \`entry\` to search all ${entries.length} entries.`
+    : "";
+  await interaction.reply({
+    content:
+      (matches.length ? `🔎 **${matches.length}** ${matches.length === 1 ? "entry matches" : "entries match"} this post, shown first.` : "No entries match this post's wording, so these are the most asked.") +
+      `\nPick one to post it here and ping whoever opened the post.${more}`,
+    components: [
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(ComponentIds.faqAnswerPick)
+          .setPlaceholder("📚 Pick a FAQ answer…")
+          .addOptions(
+            options.map((entry) => ({
+              label: truncate(entry.question, 100),
+              description: truncate(
+                `${matchIds.has(entry.id) ? "Matches this post · " : ""}${entry.category} · asked ${faqRelevance(entry)}×`,
+                100,
+              ),
+              value: String(entry.id),
+            })),
+          ),
+      ),
+    ],
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
+/** An entry picked from the "FAQ answer" menu: posts it in the support post. */
+export async function handleFaqAnswerPick(interaction: StringSelectMenuInteraction<"cached">) {
+  if (!isStaff(interaction)) throw new SyncError("Only staff can answer with a FAQ entry.");
+  const post = asForumThread(interaction.channel);
+  if (!post) throw new SyncError("Use this inside a support post.");
+  const entry = faqs.get(interaction.guildId, Number(interaction.values[0]));
+  if (!entry) throw new SyncError("That entry was deleted. Press **FAQ answer** again for the current list.");
+
+  const { thread } = post;
+  const asker = thread.ownerId && thread.ownerId !== interaction.user.id ? thread.ownerId : null;
+  await thread.send({
+    content: `${asker ? `<@${asker}>, ` : ""}**${interaction.member.displayName}** shared an answer from the FAQ:`,
+    embeds: [entryEmbed(entry)],
+    allowedMentions: { users: asker ? [asker] : [] },
+  });
+  recordSent(entry, thread);
+
+  await interaction.update({ content: `✅ Posted **${entry.question}**.`, components: [] });
 }
 
 /** Suggests entries for the `entry` option: matches for what's typed, or for the current post if nothing is. */
