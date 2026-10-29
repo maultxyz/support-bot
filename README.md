@@ -23,6 +23,7 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 - **Closing inactive posts.** With `/setup autoclose on`, a support post closes on its own when staff replied last and the author hasn't answered for the set time. The bot posts a closing message with a **Reactivate** button (for the author or staff), tags the post `Resolved`, and closes it. The author can also reopen it just by sending a message. Feature requests and posts linked to a GitHub issue are never closed this way.
 - **Stats.** `/stats` shows new and closed posts, closing reasons, open and unanswered counts, first-response and time-to-close medians, top topics, and most-voted feature requests.
 - **Announcements.** `/announce post` opens an announcement builder that only you can see, with a live preview of the embed. One button per part of the embed, in the order they appear from top to bottom, sets the author, the title and message (with markdown), up to 25 fields, the image and thumbnail (uploaded or linked), and the footer and posting time. A menu sets the color (presets or any hex). **Post** sends it to the chosen channel, optionally pinging a role, and in announcement channels `publish:true` also sends it to servers that follow the channel. `/announce edit` opens an existing announcement in the same builder. Drafts live in memory: they're lost if the bot restarts or after an hour without changes.
+- **FAQ from resolved posts.** `/faq generate` reads the support forums' history straight from Discord, including posts from before the bot was added, and picks the posts tagged `Resolved` from the last `days` (or, with `resolved_only:false`, every post someone replied to). It sends the conversations to Claude (labelled only as Asker, Staff, or Member, without usernames), and gets back FAQ entries grouped by topic. Without a `channel` you get a private `FAQ.md` draft to review; with one, the FAQ is posted as embeds, or as one post per question in a forum (applying a forum tag that matches the topic, if there is one). Needs `ANTHROPIC_API_KEY`.
 - **GitHub → Discord** (via webhook)
   - New issue comments are posted into the thread.
   - When someone is assigned to the issue, the bot posts that they're working on it.
@@ -52,9 +53,10 @@ A Discord support bot for **forum channels** that syncs support and feature requ
 | `/stats [days]` | Staff | Support activity for the last `days` (default 30), shown only to you |
 | `/announce post [channel] [ping] [publish]` | Staff | Open the announcement builder, then post to `channel` (default: the current one). Pinging @everyone or a role that isn't mentionable needs **Mention Everyone** in that channel |
 | `/announce edit <message>` | Staff | Open an announcement posted with `/announce post` in the builder, given its message link. Saving doesn't ping anyone again |
+| `/faq generate [days] [resolved_only] [channel]` | Staff | Compile a FAQ with Claude from support posts in the last `days` (default 90), tagged `Resolved` unless `resolved_only:false`. Without `channel`, only you see a `FAQ.md` draft; with one, it's posted there |
 | `/resolve [reason] [close_issue]` | Post author or staff | Close the post and tag it with the reason: **Resolved** (default), **Added**, or **Rejected**. Only staff can choose Added or Rejected. Staff also close the linked issue (default `true`) |
 
-**Staff** means members with a role added through `/setup staff add`, plus anyone with **Manage Threads** (so moderators work before any roles are set up). Staff can use `/issue`, `/stats`, and `/announce` and resolve any post. Everyone can see `/issue`, `/stats`, and `/announce`, but the bot rejects non-staff when they run them. `/setup` is hidden from members without Manage Server. To change that, go to *Server Settings → Integrations*.
+**Staff** means members with a role added through `/setup staff add`, plus anyone with **Manage Threads** (so moderators work before any roles are set up). Staff can use `/issue`, `/stats`, `/announce`, and `/faq` and resolve any post. Everyone can see `/issue`, `/stats`, `/announce`, and `/faq`, but the bot rejects non-staff when they run them. `/setup` is hidden from members without Manage Server. To change that, go to *Server Settings → Integrations*.
 
 ## Setup
 
@@ -120,6 +122,7 @@ src/
   sync.ts            Discord → GitHub logic (create/link/resolve/mirror)
   tracking.ts        post tracking, votes, unanswered alerts, inactive-post closing
   github-events.ts   GitHub → Discord webhook handling
+  faq.ts             Claude API call that turns resolved threads into FAQ entries
   server.ts          Hono routes
   discord/
     client.ts        gateway client + event wiring
@@ -129,6 +132,7 @@ src/
     details.ts       "Add details" questions on short posts
     stats.ts         /stats
     announce.ts      /announce
+    faq.ts           /faq
     util.ts          tags, permissions, embeds
 ```
 

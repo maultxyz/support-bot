@@ -235,6 +235,31 @@ export const commands = [
           opt.setName("message").setDescription("Link to the announcement (or its message ID)").setRequired(true),
         ),
     ),
+
+  new SlashCommandBuilder()
+    .setName("faq")
+    .setDescription("Compile a FAQ from resolved support posts with Claude")
+    .setContexts(InteractionContextType.Guild)
+    // Visible to everyone so roles added with /setup staff can use it; access is checked at runtime.
+    .addSubcommand((sub) =>
+      sub
+        .setName("generate")
+        .setDescription("Draft a FAQ from the support forums' history, or post it to a channel")
+        .addIntegerOption((opt) =>
+          opt.setName("days").setDescription("How many days of forum history to read (default: 90)").setMinValue(1).setMaxValue(365),
+        )
+        .addBooleanOption((opt) =>
+          opt
+            .setName("resolved_only")
+            .setDescription("Only use posts tagged Resolved; false uses any post with replies (default: true)"),
+        )
+        .addChannelOption((opt) =>
+          opt
+            .setName("channel")
+            .setDescription("Where to post the FAQ; a forum gets one post per question (default: only show a draft)")
+            .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildForum),
+        ),
+    ),
 ].map((command) => command.toJSON());
 
 /** Registers commands globally so they work in every server the bot is invited to. */

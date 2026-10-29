@@ -15,6 +15,7 @@ import { createIssueForThread, linkExistingIssue, resolveThread, SyncError, unli
 import { INACTIVE_REASON, reactivatePost } from "../tracking.js";
 import { handleAnnounceCommand, handleAnnounceComponent, handleAnnounceModal } from "./announce.js";
 import { handleAddDetailsButton, handleDetailsModal } from "./details.js";
+import { handleFaqCommand } from "./faq.js";
 import { handleDetailQuestionsModal, handleSetupCommand } from "./setup.js";
 import { handleStatsCommand } from "./stats.js";
 import {
@@ -59,6 +60,9 @@ export async function handleInteraction(interaction: Interaction) {
       else if (interaction.commandName === "stats" && interaction.inCachedGuild()) {
         requireStaff(interaction, "Only staff can see support stats.");
         await handleStatsCommand(interaction);
+      } else if (interaction.commandName === "faq" && interaction.inCachedGuild()) {
+        requireStaff(interaction, "Only staff can compile the FAQ.");
+        await handleFaqCommand(interaction);
       }
     } else if (interaction.customId.startsWith(ComponentIds.announce)) {
       if (interaction.inCachedGuild()) await handleAnnounceComponent(interaction);

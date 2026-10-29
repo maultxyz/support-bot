@@ -33,6 +33,10 @@ const schema = z.object({
 
   MIRROR_DISCORD_MESSAGES: z.stringbool().default(true),
   MIRROR_GITHUB_COMMENTS: z.stringbool().default(true),
+
+  // Optional: enables /faq, which has Claude compile FAQs from resolved support posts.
+  ANTHROPIC_API_KEY: z.string().optional(),
+  FAQ_MODEL: z.string().default("claude-opus-5-5"),
 });
 
 const parsed = schema.safeParse(process.env);
